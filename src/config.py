@@ -18,8 +18,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ac_loc_type": "Current",
     "ac_loc_x": 0,
     "ac_loc_y": 0,
-    "show_overlay": True,
-    "close_to_tray": True
+    "show_overlay": False,
+    "close_to_tray": False
 }
 
 def load_config() -> Dict[str, Any]:
