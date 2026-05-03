@@ -68,6 +68,19 @@ class StatusOverlay(ctk.CTkToplevel):
         """Updates the status text and its color in the overlay."""
         self.label.configure(text=f"● {text.upper()}", text_color=color)
 
+import sys
+import os
+
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 class OtoshiApp(ctk.CTk):
     """
     The main application class for Otoshi. 
@@ -77,6 +90,14 @@ class OtoshiApp(ctk.CTk):
         super().__init__()
 
         self.title("Otoshi")
+        
+        # Set window icon
+        try:
+            icon_path = get_resource_path("icon.ico")
+            self.iconbitmap(icon_path)
+            self.wm_iconbitmap(icon_path)
+        except Exception as e:
+            logger.error(f"Failed to load icon: {e}")
         self.geometry("420x540")
         self.resizable(False, False)
         self.configure(fg_color="#09090B") # Industrial Deep Dark
