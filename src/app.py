@@ -527,6 +527,16 @@ class OtoshiApp(ctk.CTk):
         self.bind("<Key>", on_key_press)
         self.focus_set()
 
+    def is_busy(self):
+        """Checks if any operation is currently active and returns its name if so."""
+        if self.macro_engine.is_recording:
+            return "RECORDING"
+        if self.macro_engine.is_playing:
+            return "PLAYBACK"
+        if self.ac_engine.is_running:
+            return "CLICKER"
+        return None
+
     def update_status(self, text, color):
         """Updates status indicators in both main window and overlay."""
         self.status_label.configure(text=text.upper(), text_color=color)
@@ -540,6 +550,9 @@ class OtoshiApp(ctk.CTk):
 
     def _do_toggle_recording(self):
         if not self.macro_engine.is_recording:
+            if self.is_busy():
+                return
+
             if self.macro_engine.start_recording(self.on_move, self.on_click, self.on_scroll, self.on_press, self.on_release):
                 logger.info("Started macro recording.")
                 self.update_status("RECORDING", "#EF4444")
@@ -558,6 +571,9 @@ class OtoshiApp(ctk.CTk):
 
     def _do_toggle_playing(self):
         if not self.macro_engine.is_playing:
+            if self.is_busy():
+                return
+
             if not self.macro_engine.events:
                 self.update_status("NO MACRO", "#EF4444")
                 self.after(2000, lambda: self.update_status("READY", "#F59E0B"))
@@ -609,6 +625,9 @@ class OtoshiApp(ctk.CTk):
     def _do_toggle_auto_clicker(self):
         """Toggles the auto-clicker state based on current UI parameters."""
         if not self.ac_engine.is_running:
+            if self.is_busy():
+                return
+
             try:
                 # Sync UI values to internal English constants
                 self.ac_interval_ms = int(self.ac_interval_entry.get())
