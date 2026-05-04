@@ -243,15 +243,14 @@ class OtoshiApp(ctk.CTk):
         self.container.grid_rowconfigure(0, weight=1)
 
         self.frames = {}
-        self.initialized_tabs = set()
         for name in ["Macro", "Auto Clicker", "Settings"]:
             f = ctk.CTkFrame(self.container, fg_color="#18181B", corner_radius=0)
             self.frames[name] = f
             f.grid(row=0, column=0, sticky="nsew")
-        
-        # Only setup the initial tab immediately
+            
         self.setup_macro_ui()
-        self.initialized_tabs.add("Macro")
+        self.setup_clicker_ui()
+        self.setup_settings_ui()
         
         self.show_frame("Macro")
 
@@ -261,14 +260,7 @@ class OtoshiApp(ctk.CTk):
         frame.tkraise()
 
     def on_nav_change(self, value):
-        """Handles tab switching with lazy loading support."""
-        if value not in self.initialized_tabs:
-            if value == "Auto Clicker":
-                self.setup_clicker_ui()
-            elif value == "Settings":
-                self.setup_settings_ui()
-            self.initialized_tabs.add(value)
-            
+        """Handles tab switching."""
         self.show_frame(value)
 
     def setup_macro_ui(self):
