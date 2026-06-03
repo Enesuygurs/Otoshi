@@ -437,7 +437,7 @@ class OtoshiApp(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), 
             text_color="#E1E1E6"
         ).pack(side="left")
-        self.speed_option = ctk.CTkOptionMenu(
+        self.speed_option = ctk.CTkComboBox(
             row_speed, values=["0.5x", "1.0x", "1.5x", "2.0x", "3.0x", "4.0x", "5.0x", "10.0x", "20.0x"], 
             width=100, height=28, font=ctk.CTkFont(family="Segoe UI", size=12),
             fg_color="#27272A", button_color="#3F3F46", corner_radius=0
