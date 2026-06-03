@@ -13,7 +13,7 @@ Otoshi is a high-performance macro recording and auto-clicking utility built wit
 - **🎨 Premium Dark UI**: Minimalist industrial design with smooth transitions and iOS-style navigation.
 - **⌨️ Customizable Hotkeys**: Register global hotkeys to control actions even when the app is in the background.
 - **💾 Macro Serialization**: Export and import your workflows as `.otm` files for future use.
-- **🚀 Playback Speed Control**: Fine-tune the playback speed from 0.5x to 3.0x.
+- **🚀 Playback Speed Control**: Fine-tune the playback speed from 0.5x to 20.0x.
 - **📥 System Tray Integration**: Minimize to tray for an unobtrusive background experience with status notifications.
 
 ## 🛠️ Getting Started
