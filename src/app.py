@@ -676,18 +676,28 @@ class OtoshiApp(ctk.CTk):
         if not self.macro_engine.events: 
             messagebox.showwarning("Warning", "No macro to save.")
             return
+        try:
+            self.macro_loop_count = int(self.loop_entry.get())
+        except Exception:
+            pass
         path = filedialog.asksaveasfilename(defaultextension=".otm", filetypes=[("Otoshi Macro", "*.otm")])
         if path: 
-            self.macro_engine.save_to_file(path)
+            self.update_config_from_vars()
+            self.macro_engine.save_to_file(path, self.macro_loop_count)
             messagebox.showinfo("Success", "Macro saved.")
 
     def load_macro_from_file(self):
         """Opens a file dialog to load a previously saved macro."""
         path = filedialog.askopenfilename(filetypes=[("Otoshi Macro", "*.otm")])
         if path:
-            count = self.macro_engine.load_from_file(path)
-            self.update_status(f"LOADED ({count})", "#3B82F6")
+            count, loop_count = self.macro_engine.load_from_file(path)
+            self.macro_loop_count = loop_count
+            self.loop_entry.delete(0, "end")
+            self.loop_entry.insert(0, str(loop_count))
             self.play_btn.configure(state="normal", fg_color="#059669", text_color="white")
+            self.setup_hotkeys()
+            self.update_status(f"LOADED ({count})", "#3B82F6")
+            messagebox.showinfo("Success", "Macro loaded.")
 
     # System Tray & Background Execution
     def create_tray_icon(self):

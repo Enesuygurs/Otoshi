@@ -114,20 +114,32 @@ class MacroEngine:
         self.is_playing = False
         on_finish_callback()
 
-    def save_to_file(self, file_path: str) -> None:
+    def save_to_file(self, file_path: str, loop_count: int = 1) -> None:
         """
-        Serializes events to a file.
+        Serializes events and playback metadata to a file.
         """
+        payload = {
+            "events": self.events,
+            "loop_count": loop_count,
+        }
         with open(file_path, "wb") as f:
-            pickle.dump(self.events, f)
+            pickle.dump(payload, f)
 
-    def load_from_file(self, file_path: str) -> int:
+    def load_from_file(self, file_path: str) -> tuple[int, int]:
         """
-        Loads serialized events from a file.
+        Loads serialized events and playback metadata from a file.
         """
         with open(file_path, "rb") as f:
-            self.events = pickle.load(f)
-        return len(self.events)
+            payload = pickle.load(f)
+
+        if isinstance(payload, dict) and "events" in payload:
+            self.events = payload.get("events", [])
+            loop_count = payload.get("loop_count", 1)
+        else:
+            self.events = payload
+            loop_count = 1
+
+        return len(self.events), loop_count
 
 
 class AutoClickerEngine:
