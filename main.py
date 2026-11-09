@@ -1,8 +1,6 @@
-from src.app import OtoshiApp
+"""Launcher kept at the repository root for `python main.py` and PyInstaller."""
 
-def main():
-    app = OtoshiApp()
-    app.mainloop()
+from otoshi.app import main
 
 if __name__ == "__main__":
     main()

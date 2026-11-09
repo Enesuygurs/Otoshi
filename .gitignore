@@ -36,10 +36,13 @@ ENV/
 env.bak/
 venv.bak/
 
-# Configuration & Logs
+# Configuration & Logs (1.x wrote these to the working directory)
 otoshi_config.json
 logs/
 *.log
+*.tmp
+*.egg-info/
+icon_preview.png
 
 # Macro Files
 *.otm

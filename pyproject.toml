@@ -1,32 +1,55 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "otoshi"
-version = "1.0.0"
-authors = [
-  { name="Enes Uygur", email="enesuygurs@gmail.com" },
-]
-description = "A professional high-performance macro recorder and auto clicker."
+dynamic = ["version"]
+description = "Macro recorder and auto clicker for Windows."
 readme = "README.md"
-requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Enes Uygur", email = "enesuygurs@gmail.com" }]
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+    "Topic :: Desktop Environment",
 ]
 dependencies = [
-    "customtkinter>=5.2.0",
-    "keyboard>=0.13.5",
-    "pynput>=1.7.6",
-    "pystray>=0.19.5",
+    "customtkinter>=5.2.2,<7",
+    "pynput>=1.7.6,<2",
+    "pystray>=0.19.5,<1",
     "Pillow>=10.0.0",
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/enesuygurs/otoshi"
-"Bug Tracker" = "https://github.com/enesuygurs/otoshi/issues"
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "pyinstaller>=6"]
 
-[project.scripts]
-otoshi = "main:main"
+[project.urls]
+Homepage = "https://github.com/Enesuygurs/Otoshi"
+Issues = "https://github.com/Enesuygurs/Otoshi/issues"
+
+[project.gui-scripts]
+otoshi = "otoshi.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "otoshi.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["otoshi*"]
+
+[tool.setuptools.package-data]
+otoshi = ["assets/*", "locales/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["UP006", "UP007", "UP035", "UP045"]  # keep typing.Optional/List for 3.9 compatibility

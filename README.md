@@ -1,90 +1,116 @@
-# Otoshi - Professional Macro & Auto Clicker
+<p align="center">
+  <img src="otoshi/assets/icon.png" width="112" alt="Otoshi icon">
+</p>
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)
-![Aesthetic](https://img.shields.io/badge/ui-customtkinter-orange.svg)
+<h1 align="center">Otoshi</h1>
 
-Otoshi is a high-performance macro recording and auto-clicking utility built with Python and CustomTkinter. Designed with a focus on precision and aesthetics, it features an industrial-grade dark UI and robust automation capabilities.
+<p align="center">Macro recorder and auto clicker for Windows, built with Python and CustomTkinter.</p>
 
-## ✨ Key Features
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Windows">
+</p>
 
-- **🔴 High-Precision Macro Recording**: Capture mouse movements, clicks, and keyboard inputs with millisecond accuracy.
-- **⚡ Advanced Auto Clicker**: Fully customizable clicking engine supporting specific locations, intervals, and click types (Single/Double).
-- **🎨 Premium Dark UI**: Minimalist industrial design with smooth transitions and iOS-style navigation.
-- **⌨️ Customizable Hotkeys**: Register global hotkeys to control actions even when the app is in the background.
-- **💾 Macro Serialization**: Export and import your workflows as `.otm` files for future use.
-- **🚀 Playback Speed Control**: Fine-tune the playback speed from 0.5x to 20.0x or enter your custom speed.
-- **📥 System Tray Integration**: Minimize to tray for an unobtrusive background experience with status notifications.
+## Features
 
-## 🛠️ Getting Started
+- **Macro recorder**: captures mouse moves, clicks, scrolling and keyboard input with precise timing, then replays it any number of times (or until stopped) at 0.1x to 100x speed.
+- **Auto clicker**: left, right or middle button, single or double clicks, a fixed interval, an optional click limit, at the cursor or at a fixed position chosen with an on-screen picker.
+- **Global hotkeys**: registered with the Win32 `RegisterHotKey` API, so they work in the background and even while an administrator window has focus. Any combination can be assigned (e.g. `Ctrl+Shift+F5`). A registered hotkey is reserved for Otoshi while it runs.
+- **Safe playback**: stopping a macro releases every key and mouse button it was holding, and the hotkeys themselves never end up inside a recording.
+- **Macro files** (`.otm`): plain JSON. Files from Otoshi 1.x are still opened, through a restricted loader that cannot run code.
+- **Countdown before playback**: 0 to 60 seconds to switch to the target window; the overlay shows the countdown and the play hotkey cancels it.
+- **10 languages**: English, Türkçe, Deutsch, Español, Français, Italiano, Português, Русский, 日本語 and 简体中文. The Windows display language is picked on first start and can be changed live under Settings.
+- **Status overlay and tray icon**: a small click-through indicator in any screen corner and a tray icon whose colour follows the current mode.
 
-### Prerequisites
+## Getting started
 
-- Python 3.8 or higher.
-- Administrator privileges (recommended for global hotkey hooks).
+Requirements: Windows 10/11 and Python 3.9+ (3.11 or newer recommended).
 
-### Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/enesuygurs/otoshi.git
-   cd otoshi
-   ```
-
-2. **Create a virtual environment:**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## 📖 Usage
-
-Launch the application with:
-```bash
-python main.py
+```powershell
+git clone https://github.com/Enesuygurs/Otoshi.git
+cd Otoshi
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py          # or: python -m otoshi
 ```
 
-### Default Hotkeys
+> [!NOTE]
+> Windows does not deliver input from elevated (administrator) windows to normal programs. To record or control such windows, run Otoshi as administrator too.
 
-| Action | Hotkey |
-| :--- | :--- |
-| Start/Stop Recording | **F2** |
-| Start/Stop Playback | **F3** |
-| Toggle Auto Clicker | **F4** |
+## Usage
 
-> [!TIP]
-> You can customize these hotkeys and other behaviors in the **Settings** tab.
+| Action | Default hotkey |
+| :--- | :---: |
+| Start / stop recording | **F2** |
+| Start / stop playback | **F3** |
+| Start / stop the auto clicker | **F4** |
 
-## 📂 Project Structure
+- Hotkeys can be changed under **Settings**: click one, then press the new combination (Esc cancels).
+- Settings are saved automatically to `%APPDATA%\Otoshi\config.json`; logs go to `%APPDATA%\Otoshi\logs`. The **Data folder** button opens that directory. A 1.x `otoshi_config.json` in the working directory is imported on first start.
+- Only one Otoshi instance can run at a time, because two instances would both react to every hotkey.
+
+## Building a standalone executable
+
+```powershell
+pip install pyinstaller
+pyinstaller Otoshi.spec        # -> dist\Otoshi\Otoshi.exe (one-folder build, keep the folder together)
+```
+
+## Development
+
+```powershell
+pip install -e .[dev]
+pytest                         # unit tests (no real mouse/keyboard input is generated)
+ruff check . ; ruff format .
+python tools/build_icons.py    # regenerate otoshi/assets/icon.ico and icon.png
+```
+
+All icons, including the application icon, the tray state icons and the UI glyphs, are drawn in code in [`otoshi/icons.py`](otoshi/icons.py), so they stay sharp at every size and are easy to tweak.
+
+### Project structure
 
 ```text
-otoshi/
-├── main.py            # Entry point
-├── pyproject.toml     # Packaging & Metadata
-├── src/               # Application logic
-│   ├── app.py         # GUI & UI Logic
-│   ├── logic.py       # Core Engines
-│   ├── config.py      # Configuration Management
-│   └── utils/         # Utilities (Logging, etc.)
-├── README.md          # Documentation
-└── LICENSE            # MIT License
+Otoshi/
+├── main.py              # launcher (also used by PyInstaller)
+├── Otoshi.spec          # PyInstaller build definition
+├── otoshi/
+│   ├── app.py           # main window, state machine, UI wiring
+│   ├── macro.py         # recording, playback, .otm file format
+│   ├── clicker.py       # auto clicker engine
+│   ├── hotkeys.py       # global hotkeys (RegisterHotKey) and combination capture
+│   ├── i18n.py          # translations; strings live in locales/*.json
+│   ├── config.py        # typed settings, validation, migration
+│   ├── overlay.py       # status overlay and location picker
+│   ├── tray.py          # system tray icon
+│   ├── widgets.py       # styled CustomTkinter components
+│   ├── icons.py         # procedural icon artwork
+│   ├── theme.py         # colours, fonts, spacing
+│   ├── timing.py        # precise interruptible waits
+│   ├── winutil.py       # Windows helpers (DPI, mutex, click-through)
+│   ├── paths.py, logger.py
+│   ├── locales/         # en, tr, de, es, fr, it, pt, ru, ja, zh
+│   └── assets/          # generated icon.ico / icon.png
+├── tests/               # pytest suite
+└── tools/build_icons.py
 ```
 
-## 🤝 Contributing
+### Macro file format
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+```json
+{
+  "format": "otoshi-macro", "version": 2, "loop_count": 1, "speed": 1.0,
+  "events": [
+    {"t": 0.42, "type": "move", "x": 10, "y": 20},
+    {"t": 0.50, "type": "click", "x": 10, "y": 20, "button": "left", "pressed": true},
+    {"t": 0.70, "type": "key", "key": {"vk": 65, "char": "a"}, "pressed": true}
+  ]
+}
+```
 
-1. Fork the Project.
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`).
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`).
-4. Push to the Branch (`git push origin feature/AmazingFeature`).
-5. Open a Pull Request.
+`t` is the number of seconds since the recording started.
 
-## 📜 License
+## License
 
-Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
+MIT. See [LICENSE](LICENSE).
