@@ -26,6 +26,11 @@ INTERVAL_MIN_MS, INTERVAL_MAX_MS = 1, 3_600_000
 CLICKS_MAX = 10_000_000
 COORD_LIMIT = 100_000
 COUNTDOWN_MAX = 60
+LOOP_DELAY_MAX = 3600.0
+JITTER_PCT_MAX = 50
+JITTER_PX_MAX = 50
+HOLD_MAX_S = 86_400.0
+CLICKER_ACTIONS = ("click", "hold")
 
 DEFAULT_HOTKEYS = {"record": "f2", "play": "f3", "clicker": "f4"}
 
@@ -39,6 +44,9 @@ class Settings:
     playback_speed: float = 1.0
     macro_loop_count: int = 1
     countdown_seconds: int = 3
+    macro_loop_delay_s: float = 0.0
+    humanize_timing_pct: int = 0
+    humanize_position_px: int = 0
 
     ac_interval_ms: int = 1000
     ac_button: str = "left"
@@ -47,11 +55,18 @@ class Settings:
     ac_location: str = "cursor"
     ac_x: int = 0
     ac_y: int = 0
+    ac_interval_max_ms: int = 0  # 0 = fixed interval
+    ac_action: str = "click"
+    ac_hold_key: str = ""
+    ac_hold_seconds: float = 0.0  # 0 = until stopped
 
     show_overlay: bool = False
     overlay_position: str = "top-left"
     close_to_tray: bool = False
-    minimize_to_tray: bool = False
+    start_with_windows: bool = False
+    start_in_tray: bool = False
+    finish_sound: bool = True
+    finish_notification: bool = False
 
     language: str = ""  # empty = detect from Windows on start
     last_macro_dir: str = ""
@@ -89,6 +104,9 @@ class Settings:
         self.playback_speed = _as_float(self.playback_speed, d.playback_speed, SPEED_MIN, SPEED_MAX)
         self.macro_loop_count = _as_int(self.macro_loop_count, d.macro_loop_count, 0, LOOPS_MAX)
         self.countdown_seconds = _as_int(self.countdown_seconds, d.countdown_seconds, 0, COUNTDOWN_MAX)
+        self.macro_loop_delay_s = _as_float(self.macro_loop_delay_s, 0.0, 0.0, LOOP_DELAY_MAX)
+        self.humanize_timing_pct = _as_int(self.humanize_timing_pct, 0, 0, JITTER_PCT_MAX)
+        self.humanize_position_px = _as_int(self.humanize_position_px, 0, 0, JITTER_PX_MAX)
 
         self.ac_interval_ms = _as_int(self.ac_interval_ms, d.ac_interval_ms, INTERVAL_MIN_MS, INTERVAL_MAX_MS)
         self.ac_button = _as_choice(self.ac_button, BUTTONS, d.ac_button)
@@ -97,11 +115,18 @@ class Settings:
         self.ac_location = _as_choice(self.ac_location, LOCATIONS, d.ac_location)
         self.ac_x = _as_int(self.ac_x, d.ac_x, -COORD_LIMIT, COORD_LIMIT)
         self.ac_y = _as_int(self.ac_y, d.ac_y, -COORD_LIMIT, COORD_LIMIT)
+        self.ac_interval_max_ms = _as_int(self.ac_interval_max_ms, 0, 0, INTERVAL_MAX_MS)
+        self.ac_action = _as_choice(self.ac_action, CLICKER_ACTIONS, d.ac_action)
+        self.ac_hold_key = _as_str(self.ac_hold_key, "").strip().lower()
+        self.ac_hold_seconds = _as_float(self.ac_hold_seconds, 0.0, 0.0, HOLD_MAX_S)
 
         self.show_overlay = _as_bool(self.show_overlay, d.show_overlay)
         self.overlay_position = _as_choice(self.overlay_position, OVERLAY_POSITIONS, d.overlay_position)
         self.close_to_tray = _as_bool(self.close_to_tray, d.close_to_tray)
-        self.minimize_to_tray = _as_bool(self.minimize_to_tray, d.minimize_to_tray)
+        self.start_with_windows = _as_bool(self.start_with_windows, d.start_with_windows)
+        self.start_in_tray = _as_bool(self.start_in_tray, d.start_in_tray)
+        self.finish_sound = _as_bool(self.finish_sound, d.finish_sound)
+        self.finish_notification = _as_bool(self.finish_notification, d.finish_notification)
         self.language = _as_choice(self.language, LANGUAGES, "")
         self.last_macro_dir = _as_str(self.last_macro_dir, "")
 

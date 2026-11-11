@@ -135,6 +135,18 @@ def hotkey_from_vk(mods: Iterable[str], vk: int) -> Optional[str]:
     return compose(mods, name) if name else None
 
 
+_MODIFIER_PRESS_VK = {"ctrl": 0xA2, "shift": 0xA0, "alt": 0xA4, "windows": 0x5B}
+
+
+def combo_vks(text: str) -> Optional[List[int]]:
+    """Virtual keys to press for a combination, modifiers first (used by the key-hold mode)."""
+    parsed = parse_hotkey(text)
+    if parsed is None:
+        return None
+    mods, key = parsed
+    return [_MODIFIER_PRESS_VK[m] for m in MODIFIER_ORDER if m in mods] + [VK_BY_NAME[key]]
+
+
 def key_vk(key: Any) -> Optional[int]:
     """Virtual-key code of a pynput ``Key``/``KeyCode``."""
     value = getattr(key, "value", key)

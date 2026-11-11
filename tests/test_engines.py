@@ -158,3 +158,81 @@ def test_recording_swallows_hotkeys_but_keeps_other_keys():
         ({"name": "ctrl_l"}, True),
         ({"name": "ctrl_l"}, False),
     ]
+
+
+# -- new options ---------------------------------------------------------------
+
+
+def test_jittered_times_stay_ordered_and_bounded():
+    import random
+
+    from otoshi.macro import jittered_times
+
+    times = [0.0, 0.1, 0.3, 0.6, 1.0]
+    assert jittered_times(times, 0.0, random.Random(1)) == times
+    out = jittered_times(times, 0.2, random.Random(1))
+    assert out == sorted(out)
+    assert 0.8 <= out[-1] <= 1.2
+
+
+def test_loop_delay_waits_between_repeats_only():
+    engine = make_engine([{"t": 0.0, "type": "move", "x": 1, "y": 1}])
+    done = threading.Event()
+    start = time.perf_counter()
+    engine.play(loops=3, speed=1.0, on_finish=done.set, loop_delay=0.1)
+    wait_for(done)
+    assert 0.18 <= time.perf_counter() - start < 0.6  # two pauses, not three
+
+
+def test_position_jitter_keeps_press_and_release_together():
+    import random
+
+    events = []
+    for i in range(20):
+        events += [
+            {"t": i * 0.001, "type": "click", "x": 100, "y": 100, "button": "left", "pressed": True},
+            {"t": i * 0.001, "type": "click", "x": 100, "y": 100, "button": "left", "pressed": False},
+        ]
+    engine = make_engine(events)
+    positions = []
+    engine._mouse.press = lambda b: positions.append(("p", engine._mouse.position))
+    engine._mouse.release = lambda b: positions.append(("r", engine._mouse.position))
+    done = threading.Event()
+    engine.play(1, 1.0, on_finish=done.set, position_jitter=5, rng=random.Random(3))
+    wait_for(done)
+    pairs = list(zip(positions[::2], positions[1::2]))
+    assert all(p[1] == r[1] for p, r in pairs)
+    assert all(abs(x - 100) <= 5 and abs(y - 100) <= 5 for _, (x, y) in positions)
+    assert len({p[1] for p, _ in pairs}) > 1
+
+
+def test_random_interval_is_within_bounds():
+    clicker = AutoClicker()
+    clicker._mouse = FakeMouse()
+    stamps = []
+    clicker._mouse.click = lambda b, n: stamps.append(time.perf_counter())
+    done = threading.Event()
+    clicker.start(20, count=6, interval_max_ms=40, on_finish=done.set)
+    wait_for(done)
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert all(0.015 <= g <= 0.08 for g in gaps)
+
+
+def test_key_hold_presses_repeats_and_releases():
+    clicker = AutoClicker()
+    clicker._keyboard = FakeKeyboard()
+    done = threading.Event()
+    clicker.start_hold([0xA0, 0x57], duration_s=0.7, on_finish=done.set)  # Shift+W
+    wait_for(done)
+    log = [(kind, key.vk) for kind, key in clicker._keyboard.log]
+    assert log[:2] == [("press", 0xA0), ("press", 0x57)]
+    assert log[-2:] == [("release", 0x57), ("release", 0xA0)]
+    assert log.count(("press", 0x57)) > 1  # auto-repeat after 0.5 s
+
+
+def test_combo_vks():
+    from otoshi.hotkeys import combo_vks
+
+    assert combo_vks("w") == [0x57]
+    assert combo_vks("ctrl+shift+a") == [0xA2, 0xA0, 0x41]
+    assert combo_vks("ctrl") is None

@@ -40,13 +40,18 @@ from .clicker import AutoClicker
 from .config import (
     BUTTONS,
     CLICK_TYPES,
+    CLICKER_ACTIONS,
     CLICKS_MAX,
     COORD_LIMIT,
     COUNTDOWN_MAX,
     DEFAULT_HOTKEYS,
+    HOLD_MAX_S,
     INTERVAL_MAX_MS,
     INTERVAL_MIN_MS,
+    JITTER_PCT_MAX,
+    JITTER_PX_MAX,
     LOCATIONS,
+    LOOP_DELAY_MAX,
     LOOPS_MAX,
     OVERLAY_POSITIONS,
     SPEED_MAX,
@@ -55,7 +60,15 @@ from .config import (
     load_settings,
     save_settings,
 )
-from .hotkeys import ERROR_IN_USE, HotkeyManager, format_hotkey, trigger_for, validate_hotkey
+from .hotkeys import (
+    ERROR_IN_USE,
+    HotkeyManager,
+    combo_vks,
+    format_hotkey,
+    parse_hotkey,
+    trigger_for,
+    validate_hotkey,
+)
 from .i18n import number, t
 from .logger import logger, setup_logging
 from .macro import MacroEngine, MacroFileError, load_macro, save_macro
@@ -77,9 +90,17 @@ from .widgets import (
     section,
     spin,
 )
-from .winutil import acquire_single_instance, open_folder, set_app_user_model_id, window_rect
+from .winutil import (
+    acquire_single_instance,
+    open_folder,
+    play_finish_sound,
+    set_app_user_model_id,
+    set_autostart,
+    window_rect,
+)
 
 ACTIONS = ("record", "play", "clicker")
+HOLD_KEY = "hold"  # capture target for the key-hold mode (not a global hotkey)
 PAGES = (("macro", "nav_macro", "page_macro_desc", "macro"),
          ("clicker", "nav_clicker", "page_clicker_desc", "cursor"),
          ("settings", "nav_settings", "page_settings_desc", "gear"))  # fmt: skip
@@ -168,6 +189,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_tray_menu()
         self._bind_hotkeys(initial=True)
+        if settings.start_with_windows:
+            set_autostart(APP_NAME, True)  # refresh the path in case Otoshi was moved
         self._set_mode(Mode.IDLE)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
@@ -186,6 +209,10 @@ class MainWindow(QMainWindow):
     def _update_setting(self, name: str, value: Any) -> None:
         setattr(self.settings, name, value)
         self._save_timer.start()
+
+    def _setter(self, name: str, digits: Optional[int] = None) -> Callable[[Any], None]:
+        """Callback that stores a control's value in the settings (optionally rounded)."""
+        return lambda value: self._update_setting(name, round(value, digits) if digits is not None else value)
 
     def _toast(self, text: str, level: str = "info", ms: int = 3500) -> None:
         self.toast.show_message(text, level, ms)
@@ -321,57 +348,109 @@ class MainWindow(QMainWindow):
 
         body.addWidget(section(t("card_playback")))
         card = Card()
-        self.loop_spin = spin(s.macro_loop_count, 0, LOOPS_MAX, lambda v: self._update_setting("macro_loop_count", v),
+        self.loop_spin = spin(s.macro_loop_count, 0, LOOPS_MAX, self._setter("macro_loop_count"),
                               special="∞")  # fmt: skip
         card.row(t("row_repeat"), t("hint_repeat_loops"), self.loop_spin)
-        self.speed_spin = double_spin(
-            s.playback_speed, SPEED_MIN, SPEED_MAX, lambda v: self._update_setting("playback_speed", round(v, 2))
-        )
+        self.speed_spin = double_spin(s.playback_speed, SPEED_MIN, SPEED_MAX, self._setter("playback_speed", 2))
         card.row(t("row_speed"), "0.1× – 100×", self.speed_spin)
         self.countdown_spin = spin(
-            s.countdown_seconds, 0, COUNTDOWN_MAX, lambda v: self._update_setting("countdown_seconds", v),
+            s.countdown_seconds, 0, COUNTDOWN_MAX, self._setter("countdown_seconds"),
             suffix=" s", special=t("value_off"),
         )  # fmt: skip
         card.row(t("row_countdown"), t("hint_countdown"), self.countdown_spin)
+        self.loop_delay_spin = double_spin(
+            s.macro_loop_delay_s, 0.0, LOOP_DELAY_MAX, self._setter("macro_loop_delay_s", 2),
+            suffix=" s", step=0.5, special=t("value_off"),
+        )  # fmt: skip
+        card.row(t("row_loop_delay"), t("hint_loop_delay"), self.loop_delay_spin)
+        body.addWidget(card)
+
+        body.addWidget(section(t("section_humanize"), t("desc_humanize")))
+        card = Card()
+        card.row(t("row_humanize_time"), t("hint_humanize_time"),
+                 spin(s.humanize_timing_pct, 0, JITTER_PCT_MAX, self._setter("humanize_timing_pct"),
+                      suffix=" %", special=t("value_off")))  # fmt: skip
+        card.row(t("row_humanize_pos"), t("hint_humanize_pos"),
+                 spin(s.humanize_position_px, 0, JITTER_PX_MAX, self._setter("humanize_position_px"),
+                      suffix=" px", special=t("value_off")))  # fmt: skip
         body.addWidget(card)
 
     def _build_clicker_page(self, body: QVBoxLayout) -> None:
         s = self.settings
-        body.addWidget(section(t("card_clicking")))
+        self.clicker_btn = PrimaryButton("violet")
+        self.clicker_btn.clicked.connect(self.toggle_clicker)
+        body.addWidget(self.clicker_btn)
+        body.addSpacing(4)
+        card = Card()
+        action = Segmented([t("action_mode_click"), t("action_mode_hold")], CLICKER_ACTIONS.index(s.ac_action),
+                           self._on_clicker_action)  # fmt: skip
+        card.row(t("row_action"), None, action)
+        body.addWidget(card)
+
+        # Mouse click mode
+        self.click_box = QWidget()
+        box = QVBoxLayout(self.click_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        box.addWidget(section(t("card_clicking")))
         card = Card()
         self.interval_spin = spin(
-            s.ac_interval_ms, INTERVAL_MIN_MS, INTERVAL_MAX_MS, lambda v: self._update_setting("ac_interval_ms", v),
+            s.ac_interval_ms, INTERVAL_MIN_MS, INTERVAL_MAX_MS, self._setter("ac_interval_ms"),
             suffix=" ms", width=140,
         )  # fmt: skip
         card.row(t("row_interval"), t("hint_interval"), self.interval_spin)
+        self.interval_max_spin = spin(
+            s.ac_interval_max_ms, 0, INTERVAL_MAX_MS, self._setter("ac_interval_max_ms"),
+            suffix=" ms", special=t("value_off"), width=140,
+        )  # fmt: skip
+        card.row(t("row_interval_max"), t("hint_interval_max"), self.interval_max_spin)
         self.button_combo = combo(_labels(BUTTONS, "button"), BUTTONS.index(s.ac_button),
                                   lambda i: self._update_setting("ac_button", BUTTONS[i]), width=140)  # fmt: skip
         card.row(t("row_mouse_button"), None, self.button_combo)
         self.type_combo = combo(_labels(CLICK_TYPES, "click"), CLICK_TYPES.index(s.ac_click_type),
                                 lambda i: self._update_setting("ac_click_type", CLICK_TYPES[i]), width=140)  # fmt: skip
         card.row(t("row_click_type"), None, self.type_combo)
-        self.clicks_spin = spin(s.ac_click_times, 0, CLICKS_MAX, lambda v: self._update_setting("ac_click_times", v),
+        self.clicks_spin = spin(s.ac_click_times, 0, CLICKS_MAX, self._setter("ac_click_times"),
                                 special="∞", width=140)  # fmt: skip
         card.row(t("row_repeat"), t("hint_repeat_clicks"), self.clicks_spin)
-        body.addWidget(card)
+        box.addWidget(card)
 
-        body.addWidget(section(t("card_position")))
+        box.addWidget(section(t("card_position")))
         card = Card()
         location = Segmented(_labels(LOCATIONS, "location"), LOCATIONS.index(s.ac_location), self._on_location_change)
         card.row(t("row_click_at"), None, location)
-        self.x_spin = spin(s.ac_x, -COORD_LIMIT, COORD_LIMIT, lambda v: self._update_setting("ac_x", v), width=96)
+        self.x_spin = spin(s.ac_x, -COORD_LIMIT, COORD_LIMIT, self._setter("ac_x"), width=96)
         self.x_spin.setPrefix("X  ")
-        self.y_spin = spin(s.ac_y, -COORD_LIMIT, COORD_LIMIT, lambda v: self._update_setting("ac_y", v), width=96)
+        self.y_spin = spin(s.ac_y, -COORD_LIMIT, COORD_LIMIT, self._setter("ac_y"), width=96)
         self.y_spin.setPrefix("Y  ")
         self.pick_btn = secondary_button("", "target", self.pick_location)
         self.pick_btn.setFixedSize(34, 34)
         self.pick_btn.setToolTip(t("picker_title"))
         card.row(t("row_coordinates"), t("hint_coordinates"), self.x_spin, self.y_spin, self.pick_btn)
-        body.addWidget(card)
-        body.addSpacing(10)
-        self.clicker_btn = PrimaryButton("violet")
-        self.clicker_btn.clicked.connect(self.toggle_clicker)
-        body.addWidget(self.clicker_btn)
+        box.addWidget(card)
+        body.addWidget(self.click_box)
+
+        # Key hold mode
+        self.hold_box = QWidget()
+        box = QVBoxLayout(self.hold_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        box.addWidget(section(t("card_hold")))
+        card = Card()
+        self.hold_key_btn = QPushButton()
+        self.hold_key_btn.setObjectName("Kbd")
+        self.hold_key_btn.setMinimumHeight(32)
+        self.hold_key_btn.setCursor(Qt.PointingHandCursor)
+        self.hold_key_btn.clicked.connect(lambda: self._begin_capture(HOLD_KEY))
+        card.row(t("row_hold_key"), t("hint_hold_key"), self.hold_key_btn)
+        self.hold_duration_spin = double_spin(
+            s.ac_hold_seconds, 0.0, HOLD_MAX_S, self._setter("ac_hold_seconds", 2),
+            suffix=" s", step=0.5, special="∞", width=140,
+        )  # fmt: skip
+        card.row(t("row_hold_duration"), t("hint_hold_duration"), self.hold_duration_spin)
+        box.addWidget(card)
+        body.addWidget(self.hold_box)
+        self._show_clicker_mode()
 
     def _build_settings_page(self, body: QVBoxLayout) -> None:
         s = self.settings
@@ -407,9 +486,19 @@ class MainWindow(QMainWindow):
         body.addWidget(section(t("section_window")))
         card = Card()
         card.row(t("row_close_to_tray"), t("desc_close_to_tray"),
-                 ToggleSwitch(s.close_to_tray, lambda on: self._update_setting("close_to_tray", on)))  # fmt: skip
-        card.row(t("row_minimize_to_tray"), t("desc_minimize_to_tray"),
-                 ToggleSwitch(s.minimize_to_tray, lambda on: self._update_setting("minimize_to_tray", on)))  # fmt: skip
+                 ToggleSwitch(s.close_to_tray, self._setter("close_to_tray")))  # fmt: skip
+        card.row(t("row_start_with_windows"), t("desc_start_with_windows"),
+                 ToggleSwitch(s.start_with_windows, self._on_autostart))  # fmt: skip
+        card.row(t("row_start_in_tray"), t("desc_start_in_tray"),
+                 ToggleSwitch(s.start_in_tray, self._setter("start_in_tray")))  # fmt: skip
+        body.addWidget(card)
+
+        body.addWidget(section(t("section_notifications")))
+        card = Card()
+        card.row(t("row_finish_sound"), t("desc_finish_sound"),
+                 ToggleSwitch(s.finish_sound, self._setter("finish_sound")))  # fmt: skip
+        card.row(t("row_finish_notification"), t("desc_finish_notification"),
+                 ToggleSwitch(s.finish_notification, self._setter("finish_notification")))  # fmt: skip
         body.addWidget(card)
 
         body.addWidget(section(t("section_about")))
@@ -496,6 +585,8 @@ class MainWindow(QMainWindow):
             total = self.settings.macro_loop_count
             return t("status_playing", loop=self.macro.current_loop, total=total if total else "∞")
         if self.mode is Mode.CLICKING:
+            if self.settings.ac_action == "hold":
+                return t("status_holding", key=format_hotkey(self.settings.ac_hold_key))
             return t("status_clicking", count=number(self.clicker.clicks_done))
         return t(MODE_STYLE[Mode.IDLE][0])
 
@@ -531,10 +622,17 @@ class MainWindow(QMainWindow):
         else:
             setup(self.play_btn, caption("btn_play", "play"), "play", "emerald", idle and has_macro)
 
+        hold = s.ac_action == "hold"
         if mode is Mode.CLICKING:
-            setup(self.clicker_btn, caption("btn_stop_clicking", "clicker"), "stop", "violet", True)
+            stop_key = "btn_stop_holding" if hold else "btn_stop_clicking"
+            setup(self.clicker_btn, caption(stop_key, "clicker"), "stop", "violet", True)
         else:
-            setup(self.clicker_btn, caption("btn_start_clicking", "clicker"), "cursor", "violet", idle)
+            start_key = "btn_start_holding" if hold else "btn_start_clicking"
+            setup(self.clicker_btn, caption(start_key, "clicker"), "play" if hold else "cursor", "violet", idle)
+        if self._capturing != HOLD_KEY:
+            self.hold_key_btn.setText(format_hotkey(s.ac_hold_key))
+            self._set_capturing_style(self.hold_key_btn, False)
+            self.hold_key_btn.setEnabled(idle)
 
         self.save_btn.setEnabled(idle and has_macro)
         self.load_btn.setEnabled(idle)
@@ -608,7 +706,7 @@ class MainWindow(QMainWindow):
             return self._busy()
         self._capturing = action
         self.hotkeys.unbind_all()  # so pressing F2 now does not start a recording
-        btn = self.hotkey_btns[action]
+        btn = self.hold_key_btn if action == HOLD_KEY else self.hotkey_btns[action]
         btn.setText(t("press_keys"))
         self._set_capturing_style(btn, True)
         self._toast(t("hotkeys_help"), "info", 10000)
@@ -621,6 +719,8 @@ class MainWindow(QMainWindow):
         self.hotkeys.cancel_capture()
         if result is None:
             self.toast.clear_message()
+        elif action == HOLD_KEY:
+            self._set_hold_key(result)
         else:
             error = validate_hotkey(result)
             clash = next((a for a in ACTIONS if a != action and self.settings.hotkey(a) == result), None)
@@ -635,6 +735,15 @@ class MainWindow(QMainWindow):
                 self._toast(t("msg_hotkey_set", action=t(f"action_{action}"), hotkey=format_hotkey(result)), "success")
         self._bind_hotkeys()
         self._refresh_controls()
+
+    def _set_hold_key(self, combo: str) -> None:
+        if parse_hotkey(combo) is None:
+            self._toast(t("hk_err_unsupported", key=format_hotkey(combo)), "error", 6000)
+        elif combo in (self.settings.hotkey(a) for a in ACTIONS):
+            self._toast(t("msg_hold_key_is_hotkey", hotkey=format_hotkey(combo)), "error", 6000)
+        else:
+            self._update_setting("ac_hold_key", combo)
+            self.toast.clear_message()
 
     # ------------------------------------------------------------------
     # Recording / playback
@@ -682,7 +791,7 @@ class MainWindow(QMainWindow):
     def _request_playback(self) -> None:
         if not self.macro.events:
             return self._toast(t("msg_no_macro"), "warning")
-        for box in (self.loop_spin, self.speed_spin, self.countdown_spin):
+        for box in (self.loop_spin, self.speed_spin, self.countdown_spin, self.loop_delay_spin):
             box.interpretText()
         if self.settings.countdown_seconds <= 0:
             return self._start_playback()
@@ -704,8 +813,14 @@ class MainWindow(QMainWindow):
         token = object()
         self._play_token = token
         s = self.settings
-        started = self.macro.play(s.macro_loop_count, s.playback_speed,
-                                  on_finish=lambda: self.dispatch(self._on_playback_finished, token))  # fmt: skip
+        started = self.macro.play(
+            s.macro_loop_count,
+            s.playback_speed,
+            on_finish=lambda: self.dispatch(self._on_playback_finished, token),
+            loop_delay=s.macro_loop_delay_s,
+            timing_jitter=s.humanize_timing_pct / 100.0,
+            position_jitter=s.humanize_position_px,
+        )
         if started:
             logger.info("Playback started (loops=%s, speed=%s)", s.macro_loop_count, s.playback_speed)
         self._set_mode(Mode.PLAYING if started else Mode.IDLE)
@@ -714,6 +829,7 @@ class MainWindow(QMainWindow):
         if token is self._play_token and self.mode is Mode.PLAYING:
             self._set_mode(Mode.IDLE)
             self._toast(t("msg_playback_finished"), "success")
+            self._notify_finished(t("msg_playback_finished"))
 
     # ------------------------------------------------------------------
     # Auto clicker
@@ -722,30 +838,75 @@ class MainWindow(QMainWindow):
         if self.mode is Mode.CLICKING:
             self.clicker.stop()
             self._set_mode(Mode.IDLE)
-            self._toast(t("msg_clicker_stopped", count=number(self.clicker.clicks_done)))
+            if self.settings.ac_action == "hold":
+                self._toast(t("msg_hold_stopped"))
+            else:
+                self._toast(t("msg_clicker_stopped", count=number(self.clicker.clicks_done)))
         elif self.mode is Mode.IDLE:
             self._start_clicker()
         else:
             self._busy()
 
     def _start_clicker(self) -> None:
-        for box in (self.interval_spin, self.clicks_spin, self.x_spin, self.y_spin):
-            box.interpretText()
         s = self.settings
         token = object()
         self._click_token = token
-        position = (s.ac_x, s.ac_y) if s.ac_location == "fixed" else None
-        started = self.clicker.start(s.ac_interval_ms, s.ac_button, s.ac_click_type, s.ac_click_times, position,
-                                     on_finish=lambda: self.dispatch(self._on_clicker_finished, token))  # fmt: skip
+        on_finish = lambda: self.dispatch(self._on_clicker_finished, token)  # noqa: E731
+        if s.ac_action == "hold":
+            self.hold_duration_spin.interpretText()
+            vks = combo_vks(s.ac_hold_key)
+            if not vks:
+                return self._toast(t("msg_hold_no_key"), "warning")
+            if s.ac_hold_key in (s.hotkey(a) for a in ACTIONS):
+                return self._toast(t("msg_hold_key_is_hotkey", hotkey=format_hotkey(s.ac_hold_key)), "error")
+            started = self.clicker.start_hold(vks, s.ac_hold_seconds, on_finish=on_finish)
+            if started:
+                logger.info("Key hold started (%s, %s s)", s.ac_hold_key, s.ac_hold_seconds)
+        else:
+            for box in (self.interval_spin, self.interval_max_spin, self.clicks_spin, self.x_spin, self.y_spin):
+                box.interpretText()
+            position = (s.ac_x, s.ac_y) if s.ac_location == "fixed" else None
+            started = self.clicker.start(
+                s.ac_interval_ms, s.ac_button, s.ac_click_type, s.ac_click_times, position,
+                on_finish=on_finish, interval_max_ms=s.ac_interval_max_ms,
+            )  # fmt: skip
+            if started:
+                logger.info("Clicker started (%s-%s ms, %s, %s, count=%s, pos=%s)", s.ac_interval_ms,
+                            s.ac_interval_max_ms, s.ac_button, s.ac_click_type, s.ac_click_times, position)  # fmt: skip
         if started:
-            logger.info("Clicker started (%s ms, %s, %s, count=%s, pos=%s)",
-                        s.ac_interval_ms, s.ac_button, s.ac_click_type, s.ac_click_times, position)  # fmt: skip
             self._set_mode(Mode.CLICKING)
 
     def _on_clicker_finished(self, token: object) -> None:
         if token is self._click_token and self.mode is Mode.CLICKING:
             self._set_mode(Mode.IDLE)
-            self._toast(t("msg_clicker_finished", count=number(self.clicker.clicks_done)), "success")
+            if self.settings.ac_action == "hold":
+                message = t("msg_hold_finished")
+            else:
+                message = t("msg_clicker_finished", count=number(self.clicker.clicks_done))
+            self._toast(message, "success")
+            self._notify_finished(message)
+
+    def _on_clicker_action(self, index: int) -> None:
+        self._update_setting("ac_action", CLICKER_ACTIONS[index])
+        self._show_clicker_mode()
+        self._refresh_controls()
+
+    def _show_clicker_mode(self) -> None:
+        hold = self.settings.ac_action == "hold"
+        self.click_box.setVisible(not hold)
+        self.hold_box.setVisible(hold)
+
+    def _notify_finished(self, message: str) -> None:
+        if self.settings.finish_sound:
+            play_finish_sound()
+        if self.settings.finish_notification and self.tray.isVisible():
+            self.tray.showMessage(APP_NAME, message, QIcon(app_pixmap(64)), 4000)
+
+    def _on_autostart(self, on: bool) -> None:
+        if set_autostart(APP_NAME, on):
+            self._update_setting("start_with_windows", on)
+        else:
+            self._toast(t("msg_autostart_failed"), "error", 6000)
 
     def _on_location_change(self, index: int) -> None:
         self._update_setting("ac_location", LOCATIONS[index])
@@ -841,8 +1002,8 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
-        if (event.type() == event.Type.WindowStateChange and self.isMinimized()
-                and self.settings.minimize_to_tray and self.tray.isVisible()):  # fmt: skip
+        # Minimising always hides to the tray (when a tray is available).
+        if event.type() == event.Type.WindowStateChange and self.isMinimized() and self.tray.isVisible():
             QTimer.singleShot(0, self.hide_to_tray)
 
     def hide_to_tray(self) -> None:
@@ -901,7 +1062,8 @@ def main() -> None:
     app.setFont(QFont(theme.FONT_FAMILY, 10))
     app.setStyleSheet(theme.stylesheet(str(asset("chevron-down.png"))))
     window = MainWindow(settings)
-    window.show()
+    if not (settings.start_in_tray and QSystemTrayIcon.isSystemTrayAvailable()):
+        window.show()
     code = app.exec()
     logging.shutdown()
     sys.exit(code)

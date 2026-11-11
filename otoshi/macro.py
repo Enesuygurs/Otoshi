@@ -19,6 +19,7 @@ import json
 import math
 import os
 import pickle
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -319,18 +320,40 @@ class MacroEngine:
         return False
 
     # -- playback ------------------------------------------------------
-    def play(self, loops: int, speed: float, on_finish: Optional[Callable[[], None]] = None) -> bool:
-        """Replay ``self.events`` ``loops`` times (0 = until stopped)."""
+    def play(
+        self,
+        loops: int,
+        speed: float,
+        on_finish: Optional[Callable[[], None]] = None,
+        loop_delay: float = 0.0,
+        timing_jitter: float = 0.0,
+        position_jitter: int = 0,
+        rng: Optional[random.Random] = None,
+    ) -> bool:
+        """Replay ``self.events`` ``loops`` times (0 = until stopped).
+
+        ``loop_delay`` waits that many seconds between repeats. ``timing_jitter``
+        (0..1) randomly stretches or shrinks every delay by up to that fraction and
+        ``position_jitter`` shifts the mouse by up to that many pixels, re-rolled
+        at every button press so a press and its release always land together.
+        """
         if self.is_recording or self.is_playing or not self.events:
             return False
         self._join_previous()
-        speed = speed if speed > 0 else 1.0
+        options = _PlayOptions(
+            loops=max(0, loops),
+            speed=speed if speed > 0 else 1.0,
+            loop_delay=max(0.0, loop_delay),
+            timing_jitter=min(max(0.0, timing_jitter), 0.9),
+            position_jitter=max(0, int(position_jitter)),
+            rng=rng or random.Random(),
+        )
         actions = _compile(self.events)
         self._play_stop = threading.Event()
         self.current_loop = 0
         self._play_thread = threading.Thread(
             target=self._play_worker,
-            args=(actions, max(0, loops), speed, self._play_stop, on_finish),
+            args=(actions, options, self._play_stop, on_finish),
             name="otoshi-playback",
             daemon=True,
         )
@@ -349,8 +372,7 @@ class MacroEngine:
     def _play_worker(
         self,
         actions: List[Tuple[float, str, tuple]],
-        loops: int,
-        speed: float,
+        opt: _PlayOptions,
         stop: threading.Event,
         on_finish: Optional[Callable[[], None]],
     ) -> None:
@@ -358,14 +380,21 @@ class MacroEngine:
         held_buttons: Dict[str, ms.Button] = {}
         try:
             loop = 0
-            while not stop.is_set() and (loops == 0 or loop < loops):
+            while not stop.is_set() and (opt.loops == 0 or loop < opt.loops):
+                if loop and opt.loop_delay and sleep_until(time.perf_counter() + opt.loop_delay, stop):
+                    break
                 loop += 1
                 self.current_loop = loop
+                times = jittered_times([a[0] for a in actions], opt.timing_jitter, opt.rng)
+                offset = (0, 0)
                 start = time.perf_counter()
-                for t, kind, args in actions:
-                    if sleep_until(start + t / speed, stop):
+                for at, (_, kind, args) in zip(times, actions):
+                    if sleep_until(start + at / opt.speed, stop):
                         break
-                    self._apply(kind, args, held_keys, held_buttons)
+                    if opt.position_jitter and kind == "click" and args[4]:
+                        offset = (opt.rng.randint(-opt.position_jitter, opt.position_jitter),
+                                  opt.rng.randint(-opt.position_jitter, opt.position_jitter))  # fmt: skip
+                    self._apply(kind, args, held_keys, held_buttons, offset)
                 self._release_all(held_keys, held_buttons)
                 if time.perf_counter() - start < _MIN_LOOP_SECONDS:
                     stop.wait(_MIN_LOOP_SECONDS)
@@ -376,13 +405,21 @@ class MacroEngine:
             if on_finish is not None:
                 on_finish()
 
-    def _apply(self, kind: str, args: tuple, held_keys: Dict[str, Any], held_buttons: Dict[str, ms.Button]) -> None:
+    def _apply(
+        self,
+        kind: str,
+        args: tuple,
+        held_keys: Dict[str, Any],
+        held_buttons: Dict[str, ms.Button],
+        offset: Tuple[int, int] = (0, 0),
+    ) -> None:
+        dx, dy = offset
         try:
             if kind == "move":
-                self._mouse.position = args
+                self._mouse.position = (args[0] + dx, args[1] + dy)
             elif kind == "click":
                 x, y, button, name, pressed = args
-                self._mouse.position = (x, y)
+                self._mouse.position = (x + dx, y + dy)
                 if pressed:
                     self._mouse.press(button)
                     held_buttons[name] = button
@@ -390,9 +427,9 @@ class MacroEngine:
                     self._mouse.release(button)
                     held_buttons.pop(name, None)
             elif kind == "scroll":
-                x, y, dx, dy = args
-                self._mouse.position = (x, y)
-                self._mouse.scroll(dx, dy)
+                x, y, sx, sy = args
+                self._mouse.position = (x + dx, y + dy)
+                self._mouse.scroll(sx, sy)
             elif kind == "key":
                 key, ident, pressed = args
                 if pressed:
@@ -423,6 +460,29 @@ class MacroEngine:
             self.stop_recording()
         self.stop_playback()
         self._join_previous()
+
+
+@dataclass
+class _PlayOptions:
+    loops: int
+    speed: float
+    loop_delay: float
+    timing_jitter: float
+    position_jitter: int
+    rng: random.Random
+
+
+def jittered_times(times: Sequence[float], jitter: float, rng: random.Random) -> List[float]:
+    """Stretch/shrink every gap between events by a random factor in ``1 ± jitter``."""
+    if not jitter:
+        return list(times)
+    out: List[float] = []
+    previous_src = previous_out = 0.0
+    for at in times:
+        previous_out += max(0.0, (at - previous_src) * (1.0 + rng.uniform(-jitter, jitter)))
+        previous_src = at
+        out.append(previous_out)
+    return out
 
 
 def _compile(events: Sequence[Event]) -> List[Tuple[float, str, tuple]]:

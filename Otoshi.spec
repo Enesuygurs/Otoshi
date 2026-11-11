@@ -51,10 +51,32 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['pytest', 'keyboard', 'tkinter', 'customtkinter', 'pystray'],
+    excludes=['pytest', 'keyboard', 'tkinter', 'customtkinter', 'pystray',
+              'ssl', '_ssl', '_hashlib', 'PySide6.QtNetwork', 'PySide6.QtSvg'],
     noarchive=False,
     optimize=0,
 )
+
+# Parts of Qt and Pillow that Otoshi never uses (about 45 MB).
+_DROP = (
+    'opengl32sw.dll',  # software OpenGL fallback; plain widgets never use OpenGL (20 MB)
+    'pyside6/translations/',  # Qt's own UI translations; Otoshi ships its own strings
+    'qt6network', 'qt6svg', 'plugins/tls/', 'plugins/networkinformation/', 'plugins/iconengines/',
+    'plugins/generic/', 'plugins/styles/',  # the Fusion style is built in
+    'qdirect2d', 'qminimal', 'qoffscreen',  # only the qwindows platform plugin is needed
+    'qgif', 'qicns', 'qjpeg', 'qsvg', 'qtga', 'qtiff', 'qwbmp', 'qwebp',  # PNG is built in, ICO stays
+    'libcrypto', 'libssl',  # OpenSSL: no network access
+    'pil/_avif', 'pil/_webp', 'pil/_imagingcms', 'pil/_imagingtk', 'pil/_imagingmath',
+)
+
+
+def _keep(entry):
+    name = entry[0].replace('\\', '/').lower()
+    return not any(token in name for token in _DROP)
+
+
+a.binaries = [b for b in a.binaries if _keep(b)]
+a.datas = [d for d in a.datas if _keep(d)]
 pyz = PYZ(a.pure)
 
 exe = EXE(

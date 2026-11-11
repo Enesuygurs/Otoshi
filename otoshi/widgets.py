@@ -223,13 +223,24 @@ class SpeedSpin(QDoubleSpinBox):
         return state, text, pos
 
 
-def double_spin(value: float, lo: float, hi: float, on_change: Callable[[float], None], width: int = 120):
+def double_spin(
+    value: float,
+    lo: float,
+    hi: float,
+    on_change: Callable[[float], None],
+    width: int = 120,
+    suffix: str = "×",
+    step: float = 0.25,
+    special: str = "",
+):
     box = SpeedSpin()
     box.setRange(lo, hi)
     box.setDecimals(2)
-    box.setSingleStep(0.25)
+    box.setSingleStep(step)
     box.setValue(value)
-    box.setSuffix("×")
+    box.setSuffix(suffix)
+    if special:
+        box.setSpecialValueText(special)
     box.setButtonSymbols(QAbstractSpinBox.NoButtons)
     box.setAlignment(Qt.AlignCenter)
     box.setFixedWidth(width)

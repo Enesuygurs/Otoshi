@@ -82,3 +82,47 @@ def window_rect(hwnd: int) -> Optional[Rect]:
     if ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
         return rect.left, rect.top, rect.right, rect.bottom
     return None
+
+
+_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def launch_command() -> str:
+    """Command line that starts this Otoshi installation (exe, or pythonw + main.py from source)."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    interpreter = pythonw if pythonw.exists() else Path(sys.executable)
+    script = Path(__file__).resolve().parent.parent / "main.py"
+    return f'"{interpreter}" "{script}"'
+
+
+def set_autostart(name: str, enabled: bool) -> bool:
+    """Add or remove the per-user "run at sign-in" entry. Returns False on failure."""
+    if not IS_WINDOWS:
+        return False
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            if enabled:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, launch_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, name)
+                except FileNotFoundError:
+                    pass
+        return True
+    except OSError:
+        logger.exception("Could not update the autostart entry")
+        return False
+
+
+def play_finish_sound() -> None:
+    if IS_WINDOWS:
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            logger.debug("Could not play sound", exc_info=True)
