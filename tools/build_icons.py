@@ -30,6 +30,9 @@ def build(out_dir: Path) -> None:
         append_images=frames[:-1],
     )
     icons.app_icon(512).save(out_dir / "icon.png")
+    icons.glyph("chevron", theme.MUTED, 48).save(out_dir / "chevron-down.png")
+    for name, color in theme.ICON_VARIANTS.items():
+        icons.app_icon(128, color).save(out_dir / f"app-{name}.png")
     print(f"wrote {out_dir / 'icon.ico'} and {out_dir / 'icon.png'}")
 
 

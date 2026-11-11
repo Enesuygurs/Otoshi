@@ -46,12 +46,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('otoshi/assets', 'otoshi/assets'), ('otoshi/locales', 'otoshi/locales')],
-    # pynput and pystray pick their backend at runtime.
-    hiddenimports=['pynput.keyboard._win32', 'pynput.mouse._win32', 'pystray._win32'],
+    # pynput picks its backend at runtime.
+    hiddenimports=['pynput.keyboard._win32', 'pynput.mouse._win32'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['pytest', 'keyboard'],
+    excludes=['pytest', 'keyboard', 'tkinter', 'customtkinter', 'pystray'],
     noarchive=False,
     optimize=0,
 )

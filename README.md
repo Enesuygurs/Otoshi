@@ -4,7 +4,7 @@
 
 <h1 align="center">Otoshi</h1>
 
-<p align="center">Macro recorder and auto clicker for Windows, built with Python and CustomTkinter.</p>
+<p align="center">Macro recorder and auto clicker for Windows, built with Python and Qt (PySide6).</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
@@ -83,8 +83,7 @@ Otoshi/
 │   ├── i18n.py          # translations; strings live in locales/*.json
 │   ├── config.py        # typed settings, validation, migration
 │   ├── overlay.py       # status overlay and location picker
-│   ├── tray.py          # system tray icon
-│   ├── widgets.py       # styled CustomTkinter components
+│   ├── widgets.py       # styled Qt components (toggle, cards, rows)
 │   ├── icons.py         # procedural icon artwork
 │   ├── theme.py         # colours, fonts, spacing
 │   ├── timing.py        # precise interruptible waits

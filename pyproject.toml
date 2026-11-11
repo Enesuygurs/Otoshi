@@ -18,9 +18,8 @@ classifiers = [
     "Topic :: Desktop Environment",
 ]
 dependencies = [
-    "customtkinter>=5.2.2,<7",
+    "PySide6-Essentials>=6.5,<7",
     "pynput>=1.7.6,<2",
-    "pystray>=0.19.5,<1",
     "Pillow>=10.0.0",
 ]
 

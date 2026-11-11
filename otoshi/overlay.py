@@ -1,178 +1,163 @@
-"""Always-on-top helper windows: the status overlay and the location picker.
-
-Both use plain Tk toplevels (not CTk) so their geometry is in real screen
-pixels, which is what the mouse controller uses as well.
-"""
+"""Always-on-top helper windows: the status overlay and the location picker."""
 
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import font as tkfont
 from typing import Callable, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageTk
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen
+from PySide6.QtWidgets import QWidget
 
 from . import theme
 from .i18n import t
-from .winutil import make_click_through, toplevel_hwnd, virtual_screen, work_area
-
-_KEY = "#010203"  # colour made fully transparent on Windows
+from .winutil import cursor_pos
 
 
-def _rgb(color: str) -> Tuple[int, int, int]:
-    color = color.lstrip("#")
-    return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
-
-
-class StatusOverlay(tk.Toplevel):
-    """Small click-through pill in a screen corner showing the current mode."""
+class StatusOverlay(QWidget):
+    """Small, click-through, anti-aliased pill in a screen corner."""
 
     MARGIN = 16
 
-    def __init__(self, master: tk.Misc, position: str = "top-left") -> None:
-        super().__init__(master)
-        self.withdraw()
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-        try:
-            self.attributes("-transparentcolor", _KEY)
-            self.attributes("-alpha", 0.94)
-        except tk.TclError:
-            pass
-        self.configure(bg=_KEY)
-        self._canvas = tk.Canvas(self, bg=_KEY, highlightthickness=0, bd=0)
-        self._canvas.pack()
-        self._scale = max(1.0, self.winfo_fpixels("1i") / 96.0)
-        self._font = tkfont.Font(family=theme.FONT_FAMILY, size=10, weight="bold")
-        self._photo: Optional[ImageTk.PhotoImage] = None
-        self._position = position
-        self._click_through = False
-        self._state: Tuple[str, str] = ("", "")
-        self.set_status("Ready", theme.IDLE)
-
-    def set_status(self, text: str, color: str) -> None:
-        if (text, color) == self._state:
-            return
-        self._state = (text, color)
-        s = self._scale
-        pad_x, dot_d, gap = round(12 * s), round(8 * s), round(8 * s)
-        text_w = self._font.measure(text)
-        h = self._font.metrics("linespace") + round(12 * s)
-        w = pad_x + dot_d + gap + text_w + pad_x
-
-        ss = 4
-        img = Image.new("RGB", (w * ss, h * ss), _rgb(_KEY))
-        d = ImageDraw.Draw(img)
-        d.rounded_rectangle(
-            [0, 0, w * ss - 1, h * ss - 1],
-            radius=h * ss // 2,
-            fill=_rgb(theme.SURFACE),
-            outline=_rgb(theme.BORDER),
-            width=ss,
+    def __init__(self, position: str = "top-left") -> None:
+        super().__init__(
+            None,
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+            | Qt.WindowTransparentForInput
+            | Qt.WindowDoesNotAcceptFocus,
         )
-        cy = h * ss / 2
-        d.ellipse([pad_x * ss, cy - dot_d * ss / 2, (pad_x + dot_d) * ss, cy + dot_d * ss / 2], fill=_rgb(color))
-        self._photo = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
-
-        c = self._canvas
-        c.delete("all")
-        c.configure(width=w, height=h)
-        c.create_image(0, 0, anchor="nw", image=self._photo)
-        c.create_text(pad_x + dot_d + gap, h / 2, text=text, anchor="w", fill=theme.TEXT, font=self._font)
-        self._place(w, h)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self._position = position
+        self._text, self._color = "", theme.IDLE
+        self._font = QFont(theme.FONT_FAMILY, 9)
+        self._font.setWeight(QFont.DemiBold)
+        self.set_status(t("mode_ready"), theme.IDLE)
 
     def set_font_family(self, family: str) -> None:
-        self._font.configure(family=family)
-        text, color = self._state
-        self._state = ("", "")
-        self.set_status(text, color)
+        self._font.setFamily(family)
+        self._resize()
+
+    def set_status(self, text: str, color: str) -> None:
+        if (text, color) == (self._text, self._color):
+            return
+        self._text, self._color = text, color
+        self._resize()
+        self.update()
 
     def set_position(self, position: str) -> None:
         self._position = position
-        self._place(int(self._canvas.cget("width")), int(self._canvas.cget("height")))
+        self._place()
 
-    def _place(self, w: int, h: int) -> None:
-        left, top, right, bottom = work_area((0, 0, self.winfo_screenwidth(), self.winfo_screenheight()))
-        m = round(self.MARGIN * self._scale)
-        x = left + m if "left" in self._position else right - w - m
-        y = top + m if "top" in self._position else bottom - h - m
-        self.geometry(f"{w}x{h}+{x}+{y}")
+    def _resize(self) -> None:
+        fm = QFontMetrics(self._font)
+        h = fm.height() + 14
+        w = 30 + fm.horizontalAdvance(self._text) + 16
+        self.setFixedSize(w, h)
+        self._place()
 
-    def show(self) -> None:
-        self.deiconify()
-        self.lift()
-        if not self._click_through:
-            self.update_idletasks()
-            make_click_through(toplevel_hwnd(self))
-            self._click_through = True
+    def _place(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        m = self.MARGIN
+        x = area.left() + m if "left" in self._position else area.right() - self.width() - m
+        y = area.top() + m if "top" in self._position else area.bottom() - self.height() - m
+        self.move(x, y)
 
-    def hide(self) -> None:
-        self.withdraw()
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        bg = QColor(theme.SURFACE)
+        bg.setAlpha(240)
+        p.setPen(QPen(QColor(theme.BORDER), 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(self._color))
+        p.drawEllipse(QRectF(14, self.height() / 2 - 4, 8, 8))
+        p.setPen(QColor(theme.TEXT))
+        p.setFont(self._font)
+        p.drawText(QRect(30, 0, self.width() - 30, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self._text)
 
 
-class LocationPicker:
-    """Dims every monitor and reports the screen position of the next click.
+class LocationPicker(QWidget):
+    """Dims every monitor and reports the physical screen position of the next click.
 
     Esc or right-click cancels. ``on_done`` receives ``(x, y)`` or ``None``.
     """
 
-    def __init__(self, master: tk.Misc, on_done: Callable[[Optional[Tuple[int, int]]], None]) -> None:
+    def __init__(self, on_done: Callable[[Optional[Tuple[int, int]]], None]) -> None:
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CrossCursor)
         self._on_done = on_done
         self._finished = False
-        sw, sh = master.winfo_screenwidth(), master.winfo_screenheight()
-        x0, y0, x1, y1 = virtual_screen((0, 0, sw, sh))
+        self._coords = ""
+        screens = QGuiApplication.screens()
+        area = screens[0].geometry()
+        for screen in screens[1:]:
+            area = area.united(screen.geometry())
+        self.setGeometry(area)
+        self._primary = QGuiApplication.primaryScreen().geometry()
+        self._title_font = QFont(theme.FONT_FAMILY, 11)
+        self._title_font.setWeight(QFont.DemiBold)
+        self._body_font = QFont(theme.FONT_FAMILY, 9)
 
-        self.shade = tk.Toplevel(master)
-        self.shade.overrideredirect(True)
-        self.shade.attributes("-topmost", True)
-        try:
-            self.shade.attributes("-alpha", 0.35)
-        except tk.TclError:
-            pass
-        self.shade.configure(bg="#000000", cursor="crosshair")
-        self.shade.geometry(f"{x1 - x0}x{y1 - y0}+{x0}+{y0}")
+    def start(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.grabKeyboard()
 
-        scale = max(1.0, master.winfo_fpixels("1i") / 96.0)
-        self.hint = tk.Toplevel(master)
-        self.hint.overrideredirect(True)
-        self.hint.attributes("-topmost", True)
-        self.hint.configure(bg=theme.SURFACE, highlightthickness=1, highlightbackground=theme.BORDER)
-        title_font = tkfont.Font(family=theme.FONT_FAMILY, size=11, weight="bold")
-        body_font = tkfont.Font(family=theme.FONT_FAMILY, size=10)
-        tk.Label(self.hint, text=t("picker_title"), bg=theme.SURFACE, fg=theme.TEXT, font=title_font).pack(
-            padx=round(18 * scale), pady=(round(10 * scale), 0)
-        )
-        self._coords = tk.Label(self.hint, text="", bg=theme.SURFACE, fg=theme.VIOLET, font=title_font)
-        self._coords.pack()
-        tk.Label(self.hint, text=t("picker_cancel"), bg=theme.SURFACE, fg=theme.DIM, font=body_font).pack(
-            padx=round(18 * scale), pady=(0, round(10 * scale))
-        )
-        self.hint.update_idletasks()
-        hw = self.hint.winfo_reqwidth()
-        self.hint.geometry(f"+{(sw - hw) // 2}+{round(40 * scale)}")
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 95))
+        w, h = 360, 92
+        top_left = self.mapFromGlobal(QPoint(self._primary.center().x() - w // 2, self._primary.top() + 40))
+        box = QRectF(top_left.x(), top_left.y(), w, h)
+        p.setPen(QPen(QColor(theme.BORDER), 1))
+        p.setBrush(QColor(theme.SURFACE))
+        p.drawRoundedRect(box, 12, 12)
+        p.setPen(QColor(theme.TEXT))
+        p.setFont(self._title_font)
+        p.drawText(box.adjusted(0, 10, 0, -h + 38), Qt.AlignCenter, t("picker_title"))
+        p.setPen(QColor(theme.VIOLET))
+        p.drawText(box.adjusted(0, 36, 0, -h + 62), Qt.AlignCenter, self._coords)
+        p.setPen(QColor(theme.DIM))
+        p.setFont(self._body_font)
+        p.drawText(box.adjusted(0, 62, 0, -6), Qt.AlignCenter, t("picker_cancel"))
 
-        for widget in (self.shade, self.hint):
-            widget.bind("<Button-1>", self._pick)
-            widget.bind("<Button-3>", lambda _e: self._finish(None))
-            widget.bind("<Escape>", lambda _e: self._finish(None))
-            widget.bind("<Motion>", self._track)
-        self.shade.focus_force()
-        self.shade.grab_set()
+    def mouseMoveEvent(self, _event) -> None:
+        pos = cursor_pos()
+        if pos:
+            self._coords = f"X {pos[0]}    Y {pos[1]}"
+            self.update()
 
-    def _track(self, event: tk.Event) -> None:
-        self._coords.configure(text=f"X {event.x_root}   Y {event.y_root}")
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            pos = cursor_pos()
+            if pos is None:
+                g = event.globalPosition().toPoint()
+                pos = (g.x(), g.y())
+            self._finish(pos)
+        else:
+            self._finish(None)
 
-    def _pick(self, event: tk.Event) -> None:
-        self._finish((event.x_root, event.y_root))
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self._finish(None)
 
     def _finish(self, result: Optional[Tuple[int, int]]) -> None:
         if self._finished:
             return
         self._finished = True
-        try:
-            self.shade.grab_release()
-        except tk.TclError:
-            pass
-        self.shade.destroy()
-        self.hint.destroy()
+        self.releaseKeyboard()
+        self.close()
         self._on_done(result)

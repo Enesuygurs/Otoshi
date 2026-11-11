@@ -13,12 +13,7 @@ from .logger import logger
 
 IS_WINDOWS = os.name == "nt"
 
-GWL_EXSTYLE = -20
-WS_EX_LAYERED = 0x00080000
-WS_EX_TRANSPARENT = 0x00000020
-WS_EX_NOACTIVATE = 0x08000000
 ERROR_ALREADY_EXISTS = 183
-SPI_GETWORKAREA = 0x0030
 
 Rect = Tuple[int, int, int, int]  # left, top, right, bottom
 
@@ -56,55 +51,6 @@ def acquire_single_instance(name: str) -> bool:
     return True
 
 
-def make_click_through(hwnd: int) -> None:
-    """Let mouse events pass through a window (used by the status overlay)."""
-    if not IS_WINDOWS or not hwnd:
-        return
-    try:
-        user32 = ctypes.windll.user32
-        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
-    except Exception:
-        logger.debug("Could not make window click-through", exc_info=True)
-
-
-def toplevel_hwnd(widget) -> int:
-    """HWND of the native top-level window that hosts a Tk widget."""
-    if not IS_WINDOWS:
-        return 0
-    try:
-        return int(ctypes.windll.user32.GetParent(widget.winfo_id()))
-    except Exception:
-        return 0
-
-
-def virtual_screen(fallback: Optional[Rect] = None) -> Rect:
-    """Bounding box of all monitors in physical pixels."""
-    if IS_WINDOWS:
-        try:
-            gsm = ctypes.windll.user32.GetSystemMetrics
-            x, y, w, h = gsm(76), gsm(77), gsm(78), gsm(79)
-            if w > 0 and h > 0:
-                return x, y, x + w, y + h
-        except Exception:
-            pass
-    return fallback or (0, 0, 1920, 1080)
-
-
-def work_area(fallback: Rect) -> Rect:
-    """Primary monitor area excluding the taskbar."""
-    if IS_WINDOWS:
-        try:
-            from ctypes import wintypes
-
-            rect = wintypes.RECT()
-            if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-                return rect.left, rect.top, rect.right, rect.bottom
-        except Exception:
-            pass
-    return fallback
-
-
 def open_folder(path: Path) -> None:
     if IS_WINDOWS:
         os.startfile(str(path))  # noqa: S606 - opening a local folder in Explorer
@@ -112,3 +58,27 @@ def open_folder(path: Path) -> None:
         subprocess.Popen(["open", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path)])
+
+
+def cursor_pos() -> Optional[Tuple[int, int]]:
+    """Cursor position in physical pixels (the coordinate space pynput uses)."""
+    if not IS_WINDOWS:
+        return None
+    from ctypes import wintypes
+
+    point = wintypes.POINT()
+    if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+        return point.x, point.y
+    return None
+
+
+def window_rect(hwnd: int) -> Optional[Rect]:
+    """Outer window rectangle in physical pixels."""
+    if not IS_WINDOWS or not hwnd:
+        return None
+    from ctypes import wintypes
+
+    rect = wintypes.RECT()
+    if ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+        return rect.left, rect.top, rect.right, rect.bottom
+    return None

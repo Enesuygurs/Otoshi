@@ -219,6 +219,11 @@ def _g_gear(d, px, c):
     _circle(d, 0.5, 0.5, 0.13, px, fill=(0, 0, 0, 0))
 
 
+def _g_chevron(d, px, c):
+    P = lambda x, y: (x * px, y * px)  # noqa: E731
+    _stroke(d, [P(0.28, 0.40), P(0.5, 0.62), P(0.72, 0.40)], 0.1 * px, c)
+
+
 def _g_folder(d, px, c):
     _g_open(d, px, c)
 
@@ -234,36 +239,13 @@ _GLYPHS: Dict[str, Callable] = {
     "macro": _g_macro,
     "gear": _g_gear,
     "folder": _g_folder,
+    "chevron": _g_chevron,
 }
 
 
 @lru_cache(maxsize=128)
 def glyph(name: str, color: str, size: int) -> Image.Image:
-    px = size * 8
+    px = size * 4
     img = Image.new("RGBA", (px, px), (0, 0, 0, 0))
     _GLYPHS[name](ImageDraw.Draw(img), px, _rgba(color))
     return img.resize((size, size), Image.LANCZOS)
-
-
-_ctk_cache: Dict[Tuple[str, str, int], object] = {}
-
-
-def ctk_glyph(name: str, color: str, size: int = 18):
-    """A ``CTkImage`` for buttons/labels, rendered at 3x for high-DPI screens."""
-    import customtkinter as ctk
-
-    key = (name, color, size)
-    if key not in _ctk_cache:
-        img = glyph(name, color, size * 3)
-        _ctk_cache[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
-    return _ctk_cache[key]
-
-
-def ctk_logo(size: int = 26):
-    import customtkinter as ctk
-
-    key = ("logo", "", size)
-    if key not in _ctk_cache:
-        img = app_icon(size * 3)
-        _ctk_cache[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
-    return _ctk_cache[key]
