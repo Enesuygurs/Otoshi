@@ -219,6 +219,12 @@ def _g_gear(d, px, c):
     _circle(d, 0.5, 0.5, 0.13, px, fill=(0, 0, 0, 0))
 
 
+def _g_menu(d, px, c):
+    P = lambda x, y: (x * px, y * px)  # noqa: E731
+    for y in (0.28, 0.5, 0.72):
+        _stroke(d, [P(0.2, y), P(0.8, y)], 0.085 * px, c)
+
+
 def _g_chevron(d, px, c):
     P = lambda x, y: (x * px, y * px)  # noqa: E731
     _stroke(d, [P(0.28, 0.40), P(0.5, 0.62), P(0.72, 0.40)], 0.1 * px, c)
@@ -240,6 +246,7 @@ _GLYPHS: Dict[str, Callable] = {
     "gear": _g_gear,
     "folder": _g_folder,
     "chevron": _g_chevron,
+    "menu": _g_menu,
 }
 
 

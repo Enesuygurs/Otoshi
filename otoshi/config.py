@@ -70,6 +70,7 @@ class Settings:
 
     language: str = ""  # empty = detect from Windows on start
     last_macro_dir: str = ""
+    sidebar_expanded: bool = False
 
     # -- hotkey helpers -------------------------------------------------
     def hotkey(self, action: str) -> str:
@@ -129,6 +130,7 @@ class Settings:
         self.finish_notification = _as_bool(self.finish_notification, d.finish_notification)
         self.language = _as_choice(self.language, LANGUAGES, "")
         self.last_macro_dir = _as_str(self.last_macro_dir, "")
+        self.sidebar_expanded = _as_bool(self.sidebar_expanded, d.sidebar_expanded)
 
 
 # ---------------------------------------------------------------------------

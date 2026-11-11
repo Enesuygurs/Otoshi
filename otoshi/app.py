@@ -15,7 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QObject, QPoint, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -76,10 +76,10 @@ from .overlay import LocationPicker, StatusOverlay
 from .paths import asset, data_dir
 from .widgets import (
     Card,
+    ElidedLabel,
     PrimaryButton,
     Segmented,
     StatusPill,
-    Toast,
     ToggleSwitch,
     app_pixmap,
     combo,
@@ -105,6 +105,8 @@ PAGES = (("macro", "nav_macro", "page_macro_desc", "macro"),
          ("clicker", "nav_clicker", "page_clicker_desc", "cursor"),
          ("settings", "nav_settings", "page_settings_desc", "gear"))  # fmt: skip
 HOTKEY_DEBOUNCE_S = 0.25
+SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED = 56, 176
+CONTENT_WIDTH, MIN_CONTENT_WIDTH = 450, 420
 
 
 class Mode(Enum):
@@ -171,6 +173,8 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._picker: Optional[LocationPicker] = None
         self._page = "macro"
+        self._sized = False
+        self._tray_color = theme.IDLE
 
         self._countdown_timer = QTimer(self, interval=1000, timeout=self._countdown_tick)
         self._status_timer = QTimer(self, interval=250, timeout=self._refresh_status)
@@ -178,8 +182,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(asset("icon.ico"))))
-        self.resize(920, 690)
-        self.setMinimumSize(820, 640)
+        side = SIDEBAR_EXPANDED if settings.sidebar_expanded else SIDEBAR_COLLAPSED
+        self.resize(CONTENT_WIDTH + side, 420)
+        self.setMinimumSize(MIN_CONTENT_WIDTH + side, 300)
 
         self.overlay = StatusOverlay(settings.overlay_position)
         self.tray = QSystemTrayIcon(QIcon(app_pixmap(64, theme.IDLE)), self)
@@ -214,8 +219,16 @@ class MainWindow(QMainWindow):
         """Callback that stores a control's value in the settings (optionally rounded)."""
         return lambda value: self._update_setting(name, round(value, digits) if digits is not None else value)
 
-    def _toast(self, text: str, level: str = "info", ms: int = 3500) -> None:
-        self.toast.show_message(text, level, ms)
+    def _alert(self, text: str, retry: bool = True) -> None:
+        """Report a problem: a small dialog, or a tray balloon while hidden."""
+        if retry:
+            logger.warning("Alert: %s", text)
+        if retry and not self.isVisible() and not self.tray.isVisible():  # still starting up
+            QTimer.singleShot(800, lambda: self._alert(text, retry=False))
+        elif self.isVisible() and not self.isMinimized():
+            QMessageBox.warning(self, APP_NAME, text)
+        elif self.tray.isVisible():
+            self.tray.showMessage(APP_NAME, text, QSystemTrayIcon.Warning, 6000)
 
     # ------------------------------------------------------------------
     # Layout
@@ -229,84 +242,125 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_sidebar())
 
         content = QWidget()
-        v = QVBoxLayout(content)
-        v.setContentsMargins(32, 26, 24, 14)
-        v.setSpacing(8)
+        v = self.content_layout = QVBoxLayout(content)
+        v.setContentsMargins(18, 0, 12, 0)
+        v.setSpacing(0)
         self.stack = QStackedWidget()
         v.addWidget(self.stack, 1)
-        self.toast = Toast(t("toast_idle"))
-        v.addWidget(self.toast)
         root.addWidget(content, 1)
 
+        # The header scrolls with the page: it is moved into whichever page is shown.
+        self.header = QWidget()
+        header = QHBoxLayout(self.header)
+        header.setContentsMargins(0, 0, 0, 0)
+        self.page_title = label("", "PageTitle")
+        header.addWidget(self.page_title, 1)
+        self.status_pill = StatusPill()
+        header.addWidget(self.status_pill)
+
         self.pages: Dict[str, QWidget] = {}
+        self._bodies: Dict[str, QVBoxLayout] = {}
         builders = {"macro": self._build_macro_page, "clicker": self._build_clicker_page,
                     "settings": self._build_settings_page}  # fmt: skip
-        for key, title, desc, _icon in PAGES:
-            scroll, body = self._page_shell(t(title), t(desc))
+        for key, _title, _desc, _icon in PAGES:
+            scroll, body = self._page_shell()
             builders[key](body)
             body.addStretch(1)
             self.stack.addWidget(scroll)
             self.pages[key] = scroll
+            self._bodies[key] = body
         self.setCentralWidget(central)
         self._show_page(self._page)
 
     def _build_sidebar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("Sidebar")
-        bar.setFixedWidth(214)
-        v = QVBoxLayout(bar)
-        v.setContentsMargins(14, 20, 14, 16)
-        v.setSpacing(4)
+        """Collapsible navigation: an icon rail that expands to show page names."""
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("Sidebar")
+        self.sidebar.setFixedWidth(SIDEBAR_EXPANDED if self.settings.sidebar_expanded else SIDEBAR_COLLAPSED)
+        v = QVBoxLayout(self.sidebar)
+        v.setContentsMargins(8, 10, 8, 10)
+        v.setSpacing(6)
 
-        brand = QHBoxLayout()
-        brand.setSpacing(10)
-        logo = QLabel()
-        dpr = self.devicePixelRatioF()
-        logo_pixmap = app_pixmap(round(30 * dpr))
-        logo_pixmap.setDevicePixelRatio(dpr)
-        logo.setPixmap(logo_pixmap)
-        logo.setFixedSize(30, 30)
-        brand.addWidget(logo)
-        brand.addWidget(label(APP_NAME, "Brand"))
-        brand.addStretch(1)
-        v.addLayout(brand)
-        v.addSpacing(22)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        self.menu_btn = QPushButton()
+        self.menu_btn.setObjectName("NavButton")
+        self.menu_btn.setFixedSize(40, 40)
+        self.menu_btn.setIcon(glyph_icon("menu", theme.MUTED, 18))
+        self.menu_btn.setIconSize(QSize(18, 18))
+        self.menu_btn.setCursor(Qt.PointingHandCursor)
+        self.menu_btn.clicked.connect(self._toggle_sidebar)
+        top.addWidget(self.menu_btn)
+        self.brand = label(APP_NAME, "Brand")
+        top.addWidget(self.brand, 1)
+        v.addLayout(top)
+        v.addSpacing(6)
 
-        self.nav_group = QButtonGroup(bar)
+        self.nav_group = QButtonGroup(self.sidebar)
         self.nav_buttons: Dict[str, QPushButton] = {}
-        for key, title, _desc, icon in PAGES:
-            btn = QPushButton(f"  {t(title)}")
+        for key, _title, desc, icon in PAGES:
+            btn = QPushButton()
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
-            btn.setMinimumHeight(40)
+            btn.setFixedHeight(40)
             btn.setIcon(glyph_icon(icon, theme.MUTED, 18))
             btn.setIconSize(QSize(18, 18))
+            btn.setToolTip(t(desc))
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda _=False, k=key: self._show_page(k))
             self.nav_group.addButton(btn)
             self.nav_buttons[key] = btn
             v.addWidget(btn)
         v.addStretch(1)
-        self.status_pill = StatusPill()
-        v.addWidget(self.status_pill)
-        v.addSpacing(8)
-        version = label(f"{APP_NAME} {__version__}", "Version")
-        version.setAlignment(Qt.AlignCenter)
-        v.addWidget(version)
-        return bar
+        self._apply_sidebar_labels(self.settings.sidebar_expanded)
+        return self.sidebar
 
-    def _page_shell(self, title: str, subtitle: str) -> Tuple[QScrollArea, QVBoxLayout]:
+    def _apply_sidebar_labels(self, expanded: bool) -> None:
+        self.brand.setVisible(expanded)
+        for key, title, _desc, _icon in PAGES:
+            self.nav_buttons[key].setText(f"   {t(title)}" if expanded else "")
+
+    def _toggle_sidebar(self) -> None:
+        expanded = not self.settings.sidebar_expanded
+        self._update_setting("sidebar_expanded", expanded)
+        start, end = self.sidebar.width(), SIDEBAR_EXPANDED if expanded else SIDEBAR_COLLAPSED
+        if not expanded:
+            self._apply_sidebar_labels(False)
+        grow_window = not (self.isMaximized() or self.isFullScreen())
+        base_width = self.width() - start
+        if grow_window:  # keep the content area the same width
+            self._apply_min_width(min(start, end))
+        anim = QVariantAnimation(self)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setDuration(160)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def step(value: int) -> None:
+            self.sidebar.setFixedWidth(value)
+            if grow_window:
+                self.resize(base_width + value, self.height())
+
+        def done() -> None:
+            if expanded:
+                self._apply_sidebar_labels(True)
+            self._apply_min_width(end)
+
+        anim.valueChanged.connect(step)
+        anim.finished.connect(done)
+        anim.start(QVariantAnimation.DeleteWhenStopped)
+
+    def _page_shell(self) -> Tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # still scrolls with the wheel
         body = QWidget()
         body.setObjectName("PageBody")
         v = QVBoxLayout(body)
-        v.setContentsMargins(0, 0, 10, 10)
-        v.setSpacing(8)
-        v.addWidget(label(title, "PageTitle"))
-        v.addWidget(label(subtitle, "PageSubtitle"))
-        v.addSpacing(6)
+        v.setContentsMargins(0, 12, 6, 12)
+        v.setSpacing(6)
         scroll.setWidget(body)
         return scroll, v
 
@@ -314,7 +368,12 @@ class MainWindow(QMainWindow):
         if self._capturing:
             self._finish_capture(self._capturing, None)
         self._page = key
+        self.page_title.setText(t(next(title for k, title, _d, _i in PAGES if k == key)))
         self.nav_buttons[key].setChecked(True)
+        for body in self._bodies.values():
+            body.removeWidget(self.header)
+        self._bodies[key].insertWidget(0, self.header)
+        self.header.show()
         self.stack.setCurrentWidget(self.pages[key])
 
     def _build_macro_page(self, body: QVBoxLayout) -> None:
@@ -334,16 +393,8 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.record_btn)
         buttons.addWidget(self.play_btn)
         v.addLayout(buttons)
-        files = QHBoxLayout()
-        files.setSpacing(8)
-        self.macro_info = label("", "Info", wrap=True)
-        files.addWidget(self.macro_info, 1)
-        self.save_btn = secondary_button(t("btn_save"), "save", self.save_macro_dialog)
-        self.load_btn = secondary_button(t("btn_open"), "open", self.load_macro_dialog)
-        files.addWidget(self.save_btn)
-        files.addWidget(self.load_btn)
-        v.addLayout(files)
-        card.add(panel, (18, 18, 18, 16))
+        v.addWidget(self._build_macro_panel())
+        card.add(panel, (12, 12, 12, 10))
         body.addWidget(card)
 
         body.addWidget(section(t("card_playback")))
@@ -375,12 +426,38 @@ class MainWindow(QMainWindow):
                       suffix=" px", special=t("value_off")))  # fmt: skip
         body.addWidget(card)
 
+    def _build_macro_panel(self) -> QWidget:
+        """Summary of the current macro: status icon, name, stats and file actions."""
+        panel = QFrame()
+        panel.setObjectName("MacroPanel")
+        h = QHBoxLayout(panel)
+        h.setContentsMargins(10, 8, 8, 8)
+        h.setSpacing(10)
+        self.macro_icon = QLabel()
+        self.macro_icon.setObjectName("MacroIcon")
+        self.macro_icon.setFixedSize(34, 34)
+        self.macro_icon.setAlignment(Qt.AlignCenter)
+        h.addWidget(self.macro_icon, 0, Qt.AlignVCenter)
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        self.macro_title = ElidedLabel("", "MacroTitle")
+        self.macro_meta = label("", "MacroMeta", wrap=True)
+        self.macro_meta.setMinimumWidth(80)  # wrap further instead of widening the page
+        text.addWidget(self.macro_title)
+        text.addWidget(self.macro_meta)
+        h.addLayout(text, 1)
+        self.save_btn = secondary_button(t("btn_save"), "save", self.save_macro_dialog)
+        self.load_btn = secondary_button(t("btn_open"), "open", self.load_macro_dialog)
+        for btn in (self.save_btn, self.load_btn):
+            btn.setFixedHeight(30)
+            h.addWidget(btn, 0, Qt.AlignVCenter)
+        return panel
+
     def _build_clicker_page(self, body: QVBoxLayout) -> None:
         s = self.settings
         self.clicker_btn = PrimaryButton("violet")
         self.clicker_btn.clicked.connect(self.toggle_clicker)
         body.addWidget(self.clicker_btn)
-        body.addSpacing(4)
         card = Card()
         action = Segmented([t("action_mode_click"), t("action_mode_hold")], CLICKER_ACTIONS.index(s.ac_action),
                            self._on_clicker_action)  # fmt: skip
@@ -396,22 +473,22 @@ class MainWindow(QMainWindow):
         card = Card()
         self.interval_spin = spin(
             s.ac_interval_ms, INTERVAL_MIN_MS, INTERVAL_MAX_MS, self._setter("ac_interval_ms"),
-            suffix=" ms", width=140,
+            suffix=" ms", width=112,
         )  # fmt: skip
         card.row(t("row_interval"), t("hint_interval"), self.interval_spin)
         self.interval_max_spin = spin(
             s.ac_interval_max_ms, 0, INTERVAL_MAX_MS, self._setter("ac_interval_max_ms"),
-            suffix=" ms", special=t("value_off"), width=140,
+            suffix=" ms", special=t("value_off"), width=112,
         )  # fmt: skip
         card.row(t("row_interval_max"), t("hint_interval_max"), self.interval_max_spin)
         self.button_combo = combo(_labels(BUTTONS, "button"), BUTTONS.index(s.ac_button),
-                                  lambda i: self._update_setting("ac_button", BUTTONS[i]), width=140)  # fmt: skip
+                                  lambda i: self._update_setting("ac_button", BUTTONS[i]), width=112)  # fmt: skip
         card.row(t("row_mouse_button"), None, self.button_combo)
         self.type_combo = combo(_labels(CLICK_TYPES, "click"), CLICK_TYPES.index(s.ac_click_type),
-                                lambda i: self._update_setting("ac_click_type", CLICK_TYPES[i]), width=140)  # fmt: skip
+                                lambda i: self._update_setting("ac_click_type", CLICK_TYPES[i]), width=112)  # fmt: skip
         card.row(t("row_click_type"), None, self.type_combo)
         self.clicks_spin = spin(s.ac_click_times, 0, CLICKS_MAX, self._setter("ac_click_times"),
-                                special="∞", width=140)  # fmt: skip
+                                special="∞", width=112)  # fmt: skip
         card.row(t("row_repeat"), t("hint_repeat_clicks"), self.clicks_spin)
         box.addWidget(card)
 
@@ -419,9 +496,9 @@ class MainWindow(QMainWindow):
         card = Card()
         location = Segmented(_labels(LOCATIONS, "location"), LOCATIONS.index(s.ac_location), self._on_location_change)
         card.row(t("row_click_at"), None, location)
-        self.x_spin = spin(s.ac_x, -COORD_LIMIT, COORD_LIMIT, self._setter("ac_x"), width=96)
+        self.x_spin = spin(s.ac_x, -COORD_LIMIT, COORD_LIMIT, self._setter("ac_x"), width=84)
         self.x_spin.setPrefix("X  ")
-        self.y_spin = spin(s.ac_y, -COORD_LIMIT, COORD_LIMIT, self._setter("ac_y"), width=96)
+        self.y_spin = spin(s.ac_y, -COORD_LIMIT, COORD_LIMIT, self._setter("ac_y"), width=84)
         self.y_spin.setPrefix("Y  ")
         self.pick_btn = secondary_button("", "target", self.pick_location)
         self.pick_btn.setFixedSize(34, 34)
@@ -439,13 +516,13 @@ class MainWindow(QMainWindow):
         card = Card()
         self.hold_key_btn = QPushButton()
         self.hold_key_btn.setObjectName("Kbd")
-        self.hold_key_btn.setMinimumHeight(32)
+        self.hold_key_btn.setMinimumHeight(26)
         self.hold_key_btn.setCursor(Qt.PointingHandCursor)
         self.hold_key_btn.clicked.connect(lambda: self._begin_capture(HOLD_KEY))
         card.row(t("row_hold_key"), t("hint_hold_key"), self.hold_key_btn)
         self.hold_duration_spin = double_spin(
             s.ac_hold_seconds, 0.0, HOLD_MAX_S, self._setter("ac_hold_seconds", 2),
-            suffix=" s", step=0.5, special="∞", width=140,
+            suffix=" s", step=0.5, special="∞", width=112,
         )  # fmt: skip
         card.row(t("row_hold_duration"), t("hint_hold_duration"), self.hold_duration_spin)
         box.addWidget(card)
@@ -468,7 +545,7 @@ class MainWindow(QMainWindow):
         for action in ACTIONS:
             btn = QPushButton()
             btn.setObjectName("Kbd")
-            btn.setMinimumHeight(32)
+            btn.setMinimumHeight(26)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda _=False, a=action: self._begin_capture(a))
             self.hotkey_btns[action] = btn
@@ -555,7 +632,6 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._bind_hotkeys()
         self._set_mode(Mode.IDLE)
-        self._toast(t("msg_defaults_restored"), "success")
 
     # ------------------------------------------------------------------
     # State
@@ -564,9 +640,6 @@ class MainWindow(QMainWindow):
         self.mode = mode
         self._refresh_controls()
         self._refresh_status()
-        label_key, color = MODE_STYLE[mode]
-        self.tray.setIcon(QIcon(app_pixmap(64, color)))
-        self.tray.setToolTip(f"{APP_NAME}: {t(label_key)}")
         if mode is Mode.COUNTDOWN or self.settings.show_overlay:
             self.overlay.show()
         else:
@@ -588,12 +661,23 @@ class MainWindow(QMainWindow):
             if self.settings.ac_action == "hold":
                 return t("status_holding", key=format_hotkey(self.settings.ac_hold_key))
             return t("status_clicking", count=number(self.clicker.clicks_done))
+        if self.macro.events:
+            return f"{t('status_macro_ready')} · {t('info_events', count=number(len(self.macro.events)))}"
         return t(MODE_STYLE[Mode.IDLE][0])
 
+    def _status_color(self) -> str:
+        if self.mode is Mode.IDLE and self.macro.events:
+            return theme.EMERALD  # a recorded / loaded macro is waiting to be played
+        return MODE_STYLE[self.mode][1]
+
     def _refresh_status(self) -> None:
-        text, color = self._status_text(), MODE_STYLE[self.mode][1]
+        text, color = self._status_text(), self._status_color()
         self.status_pill.set(text, color)
         self.overlay.set_status(text, color)
+        self.tray.setToolTip(f"{APP_NAME}: {text}")
+        if color != self._tray_color:  # redraw the icon only when it changes
+            self._tray_color = color
+            self.tray.setIcon(QIcon(app_pixmap(64, color)))
 
     def _refresh_controls(self) -> None:
         mode, s = self.mode, self.settings
@@ -604,7 +688,7 @@ class MainWindow(QMainWindow):
             return f"{t(key, **kw)}   ·   {format_hotkey(s.hotkey(action))}"
 
         def setup(btn: PrimaryButton, text: str, icon: str, variant: str, enabled: bool) -> None:
-            btn.setText(f"  {text}")
+            btn.setText(text)
             btn.setIcon(glyph_icon(icon, "#FFFFFF", 18))
             btn.set_variant(variant)
             btn.setEnabled(enabled)
@@ -656,16 +740,24 @@ class MainWindow(QMainWindow):
     def _refresh_macro_info(self) -> None:
         events = self.macro.events
         if self.mode is Mode.RECORDING:
-            text = t("info_recording")
+            icon, color = "record", theme.ROSE
+            title, meta = t("mode_recording"), t("info_recording")
         elif not events:
-            text = t("info_empty", hotkey=format_hotkey(self.settings.record_hotkey))
+            icon, color = "macro", theme.DIM
+            title = t("macro_none")
+            meta = t("macro_hint", hotkey=format_hotkey(self.settings.record_hotkey))
         else:
-            name = f"  ·  {self._macro_name}" if self._macro_name else ""
-            text = f"{t('info_events', count=number(len(events)))}  ·  {_fmt_duration(self.macro.duration)}{name}"
-        self.macro_info.setText(text)
+            icon, color = "macro", theme.EMERALD
+            title = self._macro_name or t("macro_unsaved")
+            meta = f"{t('info_events', count=number(len(events)))}   ·   {_fmt_duration(self.macro.duration)}"
+        dpr = self.devicePixelRatioF()
+        pixmap = glyph_icon(icon, color, 16).pixmap(QSize(16, 16), dpr)
+        self.macro_icon.setPixmap(pixmap)
+        self.macro_title.setText(title)
+        self.macro_meta.setText(meta)
 
     def _busy(self) -> None:
-        self._toast(t("msg_busy", mode=t(MODE_STYLE[self.mode][0]).lower()), "warning")
+        """Another mode is running; the status indicator already shows which."""
 
     # ------------------------------------------------------------------
     # Hotkeys
@@ -687,8 +779,7 @@ class MainWindow(QMainWindow):
         if errors:
             names = ", ".join(format_hotkey(self.settings.hotkey(a)) for a in errors)
             in_use = len(errors) == 1 and ERROR_IN_USE in errors.values()
-            self._toast(t("hk_err_in_use", hotkey=names) if in_use else t("msg_hotkeys_failed", hotkeys=names),
-                        "error", 8000)  # fmt: skip
+            self._alert(t("hk_err_in_use", hotkey=names) if in_use else t("msg_hotkeys_failed", hotkeys=names))
 
     def _on_hotkey(self, action: str) -> None:
         now = time.monotonic()
@@ -709,7 +800,6 @@ class MainWindow(QMainWindow):
         btn = self.hold_key_btn if action == HOLD_KEY else self.hotkey_btns[action]
         btn.setText(t("press_keys"))
         self._set_capturing_style(btn, True)
-        self._toast(t("hotkeys_help"), "info", 10000)
         self.hotkeys.capture(lambda result: self.dispatch(self._finish_capture, action, result))
 
     def _finish_capture(self, action: str, result: Optional[str]) -> None:
@@ -718,32 +808,29 @@ class MainWindow(QMainWindow):
         self._capturing = None
         self.hotkeys.cancel_capture()
         if result is None:
-            self.toast.clear_message()
+            pass
         elif action == HOLD_KEY:
             self._set_hold_key(result)
         else:
             error = validate_hotkey(result)
             clash = next((a for a in ACTIONS if a != action and self.settings.hotkey(a) == result), None)
             if error:
-                self._toast(error, "error", 6000)
+                self._alert(error)
             elif clash:
-                self._toast(t("msg_hotkey_clash", hotkey=format_hotkey(result), action=t(f"action_{clash}")),
-                            "error", 6000)  # fmt: skip
+                self._alert(t("msg_hotkey_clash", hotkey=format_hotkey(result), action=t(f"action_{clash}")))
             else:
                 self.settings.set_hotkey(action, result)
                 self._save()
-                self._toast(t("msg_hotkey_set", action=t(f"action_{action}"), hotkey=format_hotkey(result)), "success")
         self._bind_hotkeys()
         self._refresh_controls()
 
     def _set_hold_key(self, combo: str) -> None:
         if parse_hotkey(combo) is None:
-            self._toast(t("hk_err_unsupported", key=format_hotkey(combo)), "error", 6000)
+            self._alert(t("hk_err_unsupported", key=format_hotkey(combo)))
         elif combo in (self.settings.hotkey(a) for a in ACTIONS):
-            self._toast(t("msg_hold_key_is_hotkey", hotkey=format_hotkey(combo)), "error", 6000)
+            self._alert(t("msg_hold_key_is_hotkey", hotkey=format_hotkey(combo)))
         else:
             self._update_setting("ac_hold_key", combo)
-            self.toast.clear_message()
 
     # ------------------------------------------------------------------
     # Recording / playback
@@ -759,7 +846,7 @@ class MainWindow(QMainWindow):
     def _start_recording(self) -> None:
         triggers = [tr for tr in (trigger_for(self.settings.hotkey(a)) for a in ACTIONS) if tr is not None]
         if not self.macro.start_recording(triggers):
-            return self._toast(t("msg_record_failed"), "error")
+            return self._alert(t("msg_record_failed"))
         logger.info("Recording started")
         self._set_mode(Mode.RECORDING)
 
@@ -769,20 +856,15 @@ class MainWindow(QMainWindow):
         logger.info("Recording stopped: %d events", count)
         if count:
             self._macro_name = None
-            self._toast(t("msg_recorded", count=number(count)), "success")
-        else:
-            self._toast(t("msg_nothing_recorded"), "warning")
         self._set_mode(Mode.IDLE)
 
     def toggle_playback(self) -> None:
         if self.mode is Mode.PLAYING:
             self.macro.stop_playback()
             self._set_mode(Mode.IDLE)
-            self._toast(t("msg_playback_stopped"))
         elif self.mode is Mode.COUNTDOWN:
             self._countdown_timer.stop()
             self._set_mode(Mode.IDLE)
-            self._toast(t("msg_playback_cancelled"))
         elif self.mode is Mode.IDLE:
             self._request_playback()
         else:
@@ -790,7 +872,7 @@ class MainWindow(QMainWindow):
 
     def _request_playback(self) -> None:
         if not self.macro.events:
-            return self._toast(t("msg_no_macro"), "warning")
+            return self._alert(t("msg_no_macro"))
         for box in (self.loop_spin, self.speed_spin, self.countdown_spin, self.loop_delay_spin):
             box.interpretText()
         if self.settings.countdown_seconds <= 0:
@@ -828,7 +910,6 @@ class MainWindow(QMainWindow):
     def _on_playback_finished(self, token: object) -> None:
         if token is self._play_token and self.mode is Mode.PLAYING:
             self._set_mode(Mode.IDLE)
-            self._toast(t("msg_playback_finished"), "success")
             self._notify_finished(t("msg_playback_finished"))
 
     # ------------------------------------------------------------------
@@ -838,10 +919,6 @@ class MainWindow(QMainWindow):
         if self.mode is Mode.CLICKING:
             self.clicker.stop()
             self._set_mode(Mode.IDLE)
-            if self.settings.ac_action == "hold":
-                self._toast(t("msg_hold_stopped"))
-            else:
-                self._toast(t("msg_clicker_stopped", count=number(self.clicker.clicks_done)))
         elif self.mode is Mode.IDLE:
             self._start_clicker()
         else:
@@ -856,9 +933,9 @@ class MainWindow(QMainWindow):
             self.hold_duration_spin.interpretText()
             vks = combo_vks(s.ac_hold_key)
             if not vks:
-                return self._toast(t("msg_hold_no_key"), "warning")
+                return self._alert(t("msg_hold_no_key"))
             if s.ac_hold_key in (s.hotkey(a) for a in ACTIONS):
-                return self._toast(t("msg_hold_key_is_hotkey", hotkey=format_hotkey(s.ac_hold_key)), "error")
+                return self._alert(t("msg_hold_key_is_hotkey", hotkey=format_hotkey(s.ac_hold_key)))
             started = self.clicker.start_hold(vks, s.ac_hold_seconds, on_finish=on_finish)
             if started:
                 logger.info("Key hold started (%s, %s s)", s.ac_hold_key, s.ac_hold_seconds)
@@ -883,7 +960,6 @@ class MainWindow(QMainWindow):
                 message = t("msg_hold_finished")
             else:
                 message = t("msg_clicker_finished", count=number(self.clicker.clicks_done))
-            self._toast(message, "success")
             self._notify_finished(message)
 
     def _on_clicker_action(self, index: int) -> None:
@@ -906,7 +982,7 @@ class MainWindow(QMainWindow):
         if set_autostart(APP_NAME, on):
             self._update_setting("start_with_windows", on)
         else:
-            self._toast(t("msg_autostart_failed"), "error", 6000)
+            self._alert(t("msg_autostart_failed"))
 
     def _on_location_change(self, index: int) -> None:
         self._update_setting("ac_location", LOCATIONS[index])
@@ -926,7 +1002,6 @@ class MainWindow(QMainWindow):
         x, y = point
         self.x_spin.setValue(x)
         self.y_spin.setValue(y)
-        self._toast(t("msg_position_set", x=x, y=y), "success")
 
     # ------------------------------------------------------------------
     # Files
@@ -950,11 +1025,10 @@ class MainWindow(QMainWindow):
         try:
             save_macro(Path(path), self.macro.events, self.settings.macro_loop_count, self.settings.playback_speed)
         except MacroFileError as exc:
-            return self._toast(str(exc), "error", 6000)
+            return self._alert(str(exc))
         self._macro_name = Path(path).name
         self._update_setting("last_macro_dir", str(Path(path).parent))
         self._refresh_macro_info()
-        self._toast(t("msg_saved", name=self._macro_name), "success")
 
     def load_macro_dialog(self) -> None:
         if self.mode is not Mode.IDLE:
@@ -965,7 +1039,7 @@ class MainWindow(QMainWindow):
         try:
             loaded = load_macro(Path(path))
         except MacroFileError as exc:
-            return self._toast(str(exc), "error", 6000)
+            return self._alert(str(exc))
         self.macro.events = loaded.events
         self._macro_name = Path(path).name
         if loaded.loop_count is not None:
@@ -974,8 +1048,7 @@ class MainWindow(QMainWindow):
             self.speed_spin.setValue(max(SPEED_MIN, min(SPEED_MAX, loaded.speed)))
         self._update_setting("last_macro_dir", str(Path(path).parent))
         self._refresh_controls()
-        key = "msg_opened_legacy" if loaded.legacy else "msg_opened"
-        self._toast(t(key, name=self._macro_name, count=number(len(loaded.events))), "success", 5000)
+        self._refresh_status()
 
     # ------------------------------------------------------------------
     # Window / overlay / tray
@@ -999,6 +1072,40 @@ class MainWindow(QMainWindow):
             return
         self.quit_app()
         event.accept()
+
+    def _min_content_width(self) -> int:
+        """Narrowest content area in which no page overflows its viewport.
+
+        Pages scroll vertically only, so anything wider than the viewport
+        would be cut off; this grows with long translations and large fonts.
+        """
+        margins = self.content_layout.contentsMargins()
+        needed = max(page.widget().minimumSizeHint().width() for page in self.pages.values())
+        return max(MIN_CONTENT_WIDTH, needed + margins.left() + margins.right())
+
+    def _apply_min_width(self, sidebar_width: int) -> None:
+        self.setMinimumWidth(self._min_content_width() + sidebar_width)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._sized:  # style sheet metrics are only final once shown
+            self._sized = True
+            self._apply_min_width(self.sidebar.width())
+            self._fit_height()
+            QTimer.singleShot(0, self._fit_height)  # again once wrapped labels have settled
+
+    def _fit_height(self) -> None:
+        """Open tall enough to show the whole macro page (and so the clicker page) without scrolling."""
+        page = self.pages["macro"]
+        body = page.widget().layout()
+        self.centralWidget().layout().activate()
+        body.activate()
+        top = page.viewport().mapTo(self, QPoint(0, 0)).y()
+        width = page.viewport().width()
+        needed = top + (body.totalHeightForWidth(width) if body.hasHeightForWidth() else body.totalSizeHint().height())
+        frame = self.frameGeometry().height() - self.height()
+        screen = self.screen().availableGeometry().height() - frame if self.screen() else needed
+        self.resize(self.width(), max(self.minimumHeight(), min(needed, screen)))
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)

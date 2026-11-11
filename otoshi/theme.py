@@ -29,7 +29,6 @@ IDLE = "#71717A"
 # Pre-rendered app/tray icon variants (assets/app-<name>.png), keyed by dot colour.
 ICON_VARIANTS = {"brand": BRAND, "idle": IDLE, "emerald": EMERALD, "violet": VIOLET, "amber": AMBER}
 
-LEVEL_COLORS = {"info": MUTED, "success": EMERALD, "warning": AMBER, "error": ROSE}
 
 FONT_FAMILY = "Segoe UI"
 
@@ -42,7 +41,7 @@ def set_font_family(family: str) -> None:
 def stylesheet(chevron_path: str) -> str:
     chevron = chevron_path.replace("\\", "/")
     return f"""
-* {{ font-family: "{FONT_FAMILY}"; font-size: 10pt; color: {TEXT}; outline: 0; }}
+* {{ font-family: "{FONT_FAMILY}"; font-size: 9pt; color: {TEXT}; outline: 0; }}
 QMainWindow, #Content {{ background: {BG}; }}
 QToolTip {{ background: {SURFACE_HI}; color: {TEXT}; border: 1px solid {BORDER}; padding: 4px 8px;
     border-radius: 6px; }}
@@ -50,31 +49,34 @@ QToolTip {{ background: {SURFACE_HI}; color: {TEXT}; border: 1px solid {BORDER};
 #Sidebar {{ background: {SIDEBAR}; border-right: 1px solid {BORDER}; }}
 #Brand {{ font-size: 14pt; font-weight: 700; }}
 #NavButton {{
-    text-align: left; padding: 0 12px; border: none; border-radius: 8px;
+    text-align: left; padding: 0 0 0 11px; border: none; border-radius: 8px;
     color: {MUTED}; font-weight: 600; background: transparent;
 }}
 #NavButton:hover {{ background: {SURFACE}; color: {TEXT}; }}
 #NavButton:checked {{ background: {SURFACE_HI}; color: {TEXT}; }}
 #Version {{ color: {DIM}; font-size: 8.5pt; }}
 
-#Pill {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 14px; }}
-#PillText {{ font-weight: 600; font-size: 9pt; }}
+#Pill {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px; }}
+#PillText {{ font-weight: 600; font-size: 8.5pt; }}
 
-#PageTitle {{ font-size: 17pt; font-weight: 700; }}
+#PageTitle {{ font-size: 13pt; font-weight: 700; }}
 #PageSubtitle {{ color: {MUTED}; }}
-#SectionTitle {{ color: {MUTED}; font-size: 9pt; font-weight: 700; padding-left: 2px; }}
-#SectionDesc {{ color: {DIM}; font-size: 9pt; padding-left: 2px; }}
+#SectionTitle {{ color: {MUTED}; font-size: 8pt; font-weight: 700; padding-left: 2px; }}
+#SectionDesc {{ color: {DIM}; font-size: 8pt; padding-left: 2px; }}
 
-#Card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px; }}
+#Card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 10px; }}
 #Separator {{ background: {BORDER}; border: none; }}
 #RowTitle {{ font-weight: 500; }}
-#RowDesc {{ color: {DIM}; font-size: 9pt; }}
+#RowDesc {{ color: {DIM}; font-size: 8pt; }}
 #Info {{ color: {MUTED}; }}
-#Toast {{ color: {DIM}; font-size: 9pt; }}
+#MacroPanel {{ background: {INPUT}; border: 1px solid {BORDER}; border-radius: 8px; }}
+#MacroIcon {{ background: {SURFACE_HI}; border-radius: 8px; }}
+#MacroTitle {{ font-weight: 600; }}
+#MacroMeta {{ color: {MUTED}; font-size: 8pt; }}
 
-QPushButton {{ border-radius: 8px; padding: 0 14px; font-weight: 600; }}
+QPushButton {{ border-radius: 7px; padding: 0 10px; font-weight: 600; }}
 QPushButton:disabled {{ color: {DIM}; }}
-#Primary {{ border: none; color: white; font-size: 10.5pt; }}
+#Primary {{ border: none; color: white; font-size: 9.5pt; }}
 #Primary[variant="rose"] {{ background: {ROSE}; }}
 #Primary[variant="rose"]:hover {{ background: {ROSE_HOVER}; }}
 #Primary[variant="emerald"] {{ background: {EMERALD}; }}
@@ -87,7 +89,8 @@ QPushButton:disabled {{ color: {DIM}; }}
 #Secondary, #Kbd {{ background: {SURFACE_HI}; border: 1px solid {BORDER}; }}
 #Secondary:hover, #Kbd:hover {{ background: {HOVER}; border-color: #3A3A42; }}
 #Secondary:pressed, #Kbd:pressed {{ background: {INPUT}; }}
-#Kbd {{ font-family: "Cascadia Mono", "Consolas", "{FONT_FAMILY}"; font-size: 9.5pt; min-width: 120px; }}
+#Kbd {{ font-family: "Cascadia Mono", "Consolas", "{FONT_FAMILY}"; font-size: 8.5pt;
+    min-width: 100px; min-height: 26px; }}
 #Kbd[capturing="true"] {{ border-color: {ROSE}; color: {ROSE}; }}
 #Kbd:disabled {{ background: {INPUT}; }}
 
@@ -98,7 +101,7 @@ QPushButton:disabled {{ color: {DIM}; }}
 
 QSpinBox, QDoubleSpinBox, QComboBox {{
     background: {INPUT}; border: 1px solid {BORDER}; border-radius: 8px;
-    padding: 0 10px; min-height: 30px; selection-background-color: {BLUE};
+    padding: 0 8px; min-height: 26px; selection-background-color: {BLUE};
 }}
 QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {{ border-color: #3A3A42; }}
 QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {BLUE}; }}
@@ -112,7 +115,7 @@ QComboBox QAbstractItemView {{
     background: {SURFACE_HI}; border: 1px solid {BORDER}; border-radius: 8px; padding: 4px;
     selection-background-color: {HOVER}; selection-color: {TEXT};
 }}
-QComboBox QAbstractItemView::item {{ min-height: 28px; padding: 0 8px; border-radius: 6px; }}
+QComboBox QAbstractItemView::item {{ min-height: 24px; padding: 0 8px; border-radius: 6px; }}
 
 QScrollArea, #qt_scrollarea_viewport, #PageBody {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}

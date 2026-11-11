@@ -23,7 +23,7 @@ def test_translation_and_fallback():
     try:
         i18n.set_language("tr")
         assert i18n.t("btn_save") == "Kaydet"
-        assert i18n.t("msg_recorded", count=i18n.number(1234)) == "1.234 olay kaydedildi."
+        assert i18n.t("info_events", count=i18n.number(1234)) == "1.234 olay"
         assert i18n.upper("Kaydedici") == "KAYDEDİCİ"
         assert i18n.t("no_such_key") == "no_such_key"
         assert i18n.set_language("xx") == "en"

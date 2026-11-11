@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import io
+import re
 from functools import lru_cache
 from typing import Callable, List, Optional, Sequence
 
 from PIL import Image
-from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QValidator
+from PySide6.QtCore import Property, QEasingCurve, QPointF, QPropertyAnimation, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap, QValidator
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractSpinBox,
@@ -21,6 +22,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionButton,
+    QStylePainter,
     QVBoxLayout,
     QWidget,
 )
@@ -71,6 +75,34 @@ def label(text: str, name: str = "", wrap: bool = False) -> QLabel:
     return widget
 
 
+class ElidedLabel(QLabel):
+    """Single-line label that shortens itself with "…" instead of forcing its
+    full text width onto the layout (long file names have no break points)."""
+
+    def __init__(self, text: str = "", name: str = "") -> None:
+        super().__init__()
+        if name:
+            self.setObjectName(name)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._full = ""
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt API
+        self._full = text
+        self._elide()
+
+    def fullText(self) -> str:  # noqa: N802 - Qt API style
+        return self._full
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(0, self.width()))
+        super().setText(shown)
+
+
 def separator() -> QFrame:
     line = QFrame()
     line.setObjectName("Separator")
@@ -85,15 +117,15 @@ class Card(QFrame):
         super().__init__(parent)
         self.setObjectName("Card")
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 4, 0, 4)
+        self._layout.setContentsMargins(0, 2, 0, 2)
         self._layout.setSpacing(0)
         self._rows = 0
 
-    def add(self, widget: QWidget, margins=(18, 12, 18, 12)) -> QWidget:
+    def add(self, widget: QWidget, margins=(12, 7, 12, 7)) -> QWidget:
         if self._rows:
             holder = QWidget()
             lay = QHBoxLayout(holder)
-            lay.setContentsMargins(18, 0, 18, 0)
+            lay.setContentsMargins(12, 0, 12, 0)
             lay.addWidget(separator())
             self._layout.addWidget(holder)
         wrapper = QWidget()
@@ -109,10 +141,10 @@ class Card(QFrame):
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(12)
+        h.setSpacing(10)
         text = QVBoxLayout()
-        text.setSpacing(2)
-        text.addWidget(label(title, "RowTitle"))
+        text.setSpacing(0)
+        text.addWidget(label(title, "RowTitle", wrap=True))
         if desc:
             text.addWidget(label(desc, "RowDesc", wrap=True))
         h.addLayout(text, 1)
@@ -124,8 +156,8 @@ class Card(QFrame):
 def section(title: str, desc: Optional[str] = None) -> QWidget:
     box = QWidget()
     v = QVBoxLayout(box)
-    v.setContentsMargins(0, 14, 0, 6)
-    v.setSpacing(2)
+    v.setContentsMargins(2, 6, 0, 2)
+    v.setSpacing(0)
     v.addWidget(label(upper(title), "SectionTitle"))
     if desc:
         v.addWidget(label(desc, "SectionDesc", wrap=True))
@@ -137,14 +169,52 @@ def section(title: str, desc: Optional[str] = None) -> QWidget:
 # ---------------------------------------------------------------------------
 
 
-class PrimaryButton(QPushButton):
+class IconTextButton(QPushButton):
+    """Push button that centres icon and text on the same optical midline.
+
+    Qt's own layout aligns the icon to the text baseline, which leaves small
+    glyph icons sitting visibly too high; here the background still comes from
+    the style sheet but the content is painted manually.
+    """
+
+    GAP = 7
+
+    def paintEvent(self, _event) -> None:
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        text, icon = self.text().strip(), self.icon()
+        opt.text, opt.icon = "", QIcon()
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.CE_PushButton, opt)
+
+        rect = self.contentsRect()
+        fm = self.fontMetrics()
+        icon_size = self.iconSize() if not icon.isNull() else QSize(0, 0)
+        gap = self.GAP if text and icon_size.width() else 0
+        available = max(0, rect.width() - icon_size.width() - gap - 8)
+        shown = fm.elidedText(text, Qt.ElideRight, available)
+        total = icon_size.width() + gap + fm.horizontalAdvance(shown)
+        x = rect.left() + (rect.width() - total) / 2
+        cy = rect.top() + rect.height() / 2
+        if icon_size.width():
+            mode = QIcon.Normal if self.isEnabled() else QIcon.Disabled
+            pixmap = icon.pixmap(icon_size, self.devicePixelRatioF(), mode)
+            painter.drawPixmap(QPointF(x, cy - icon_size.height() / 2), pixmap)
+            x += icon_size.width() + gap
+        painter.setPen(self.palette().color(QPalette.ButtonText) if self.isEnabled() else QColor(theme.DIM))
+        text_rect = QRectF(x, rect.top(), rect.right() - x, rect.height())
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, shown)
+
+
+class PrimaryButton(IconTextButton):
     def __init__(self, variant: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("Primary")
-        self.setMinimumHeight(46)
-        self.setIconSize(QSize(18, 18))
+        self.setMinimumHeight(36)
+        self.setIconSize(QSize(15, 15))
         self.setCursor(Qt.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Ignored: buttons share the row equally and may shrink instead of widening the page.
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._variant = ""
         self.set_variant(variant)
 
@@ -157,19 +227,19 @@ class PrimaryButton(QPushButton):
 
 
 def secondary_button(text: str, icon: Optional[str] = None, on_click: Optional[Callable] = None) -> QPushButton:
-    btn = QPushButton(f"  {text}" if icon and text else text)
+    btn = IconTextButton(text)
     btn.setObjectName("Secondary")
-    btn.setMinimumHeight(34)
+    btn.setMinimumHeight(28)
     btn.setCursor(Qt.PointingHandCursor)
     if icon:
-        btn.setIcon(glyph_icon(icon, theme.TEXT, 16))
-        btn.setIconSize(QSize(16, 16))
+        btn.setIcon(glyph_icon(icon, theme.TEXT, 14))
+        btn.setIconSize(QSize(14, 14))
     if on_click:
         btn.clicked.connect(on_click)
     return btn
 
 
-def combo(values: Sequence[str], current: int, on_change: Callable[[int], None], width: int = 180) -> QComboBox:
+def combo(values: Sequence[str], current: int, on_change: Callable[[int], None], width: int = 150) -> QComboBox:
     box = QComboBox()
     box.addItems(list(values))
     box.setCurrentIndex(current)
@@ -186,7 +256,7 @@ def spin(
     on_change: Callable[[int], None],
     suffix: str = "",
     special: str = "",
-    width: int = 120,
+    width: int = 100,
 ) -> QSpinBox:
     box = QSpinBox()
     box.setRange(lo, hi)
@@ -201,26 +271,58 @@ def spin(
     return box
 
 
-class SpeedSpin(QDoubleSpinBox):
-    """Shows ``1.5×`` rather than the locale's ``1,50×``."""
+class DecimalSpin(QDoubleSpinBox):
+    """Decimal input that accepts ``1.5`` or ``1,5`` and nothing else.
+
+    The suffix (``×``, `` s``) may appear once, at the end; anything else such
+    as ``1×3×`` or letters is rejected while typing. Values are shown without
+    trailing zeros (``1.5×`` instead of the locale's ``1,50×``).
+    """
+
+    _NUMBER = re.compile(r"^(\d*)(?:[.,](\d*))?$")
 
     def textFromValue(self, value: float) -> str:
         return f"{value:g}"
 
+    def _body(self, text: str) -> Optional[str]:
+        """The number part of ``text``, or ``None`` if the text is malformed."""
+        body = text.strip()
+        prefix, suffix = self.prefix().strip(), self.suffix().strip()
+        if prefix and body.startswith(prefix):
+            body = body[len(prefix) :].strip()
+        if suffix and body.endswith(suffix):
+            body = body[: -len(suffix)].strip()
+        match = self._NUMBER.match(body)
+        if not match or len(match.group(2) or "") > self.decimals():
+            return None
+        return body
+
     def valueFromText(self, text: str) -> float:
+        if self.specialValueText() and text.strip() == self.specialValueText():
+            return self.minimum()
+        body = self._body(text)
         try:
-            return float(text.replace(self.suffix(), "").replace(",", ".").strip())
+            return float(body.replace(",", ".")) if body else self.value()
         except ValueError:
             return self.value()
 
     def validate(self, text: str, pos: int):
-        body = text.replace(self.suffix(), "").replace(",", ".").strip()
-        try:
-            value = float(body)
-        except ValueError:
-            return (QValidator.Intermediate if body in ("", ".") else QValidator.Invalid), text, pos
-        state = QValidator.Acceptable if self.minimum() <= value <= self.maximum() else QValidator.Intermediate
-        return state, text, pos
+        if self.specialValueText() and text.strip() == self.specialValueText():
+            return QValidator.Acceptable, text, pos
+        body = self._body(text)
+        if body is None:
+            return QValidator.Invalid, text, pos
+        if body in ("", ".", ","):
+            return QValidator.Intermediate, text, pos
+        value = float(body.replace(",", "."))
+        if value > self.maximum():
+            return QValidator.Invalid, text, pos
+        if value < self.minimum():
+            return QValidator.Intermediate, text, pos
+        return QValidator.Acceptable, text, pos
+
+    def fixup(self, text: str) -> str:
+        return self.textFromValue(self.value()) + self.suffix()
 
 
 def double_spin(
@@ -228,12 +330,12 @@ def double_spin(
     lo: float,
     hi: float,
     on_change: Callable[[float], None],
-    width: int = 120,
+    width: int = 100,
     suffix: str = "×",
     step: float = 0.25,
     special: str = "",
 ):
-    box = SpeedSpin()
+    box = DecimalSpin()
     box.setRange(lo, hi)
     box.setDecimals(2)
     box.setSingleStep(step)
@@ -262,7 +364,7 @@ class Segmented(QFrame):
             btn = QPushButton(text)
             btn.setObjectName("SegmentButton")
             btn.setCheckable(True)
-            btn.setMinimumHeight(26)
+            btn.setMinimumHeight(22)
             btn.setCursor(Qt.PointingHandCursor)
             self._group.addButton(btn, i)
             h.addWidget(btn)
@@ -278,7 +380,7 @@ class ToggleSwitch(QAbstractButton):
         self.setCheckable(True)
         self.setChecked(checked)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(44, 24)
+        self.setFixedSize(36, 20)
         self._offset = 1.0 if checked else 0.0
         self._anim = QPropertyAnimation(self, b"offset", self)
         self._anim.setDuration(140)
@@ -302,7 +404,7 @@ class ToggleSwitch(QAbstractButton):
         self._anim.start()
 
     def sizeHint(self) -> QSize:
-        return QSize(44, 24)
+        return QSize(36, 20)
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
@@ -340,9 +442,9 @@ class StatusPill(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("Pill")
-        self.setFixedHeight(30)
+        self.setFixedHeight(24)
         h = QHBoxLayout(self)
-        h.setContentsMargins(12, 0, 14, 0)
+        h.setContentsMargins(10, 0, 12, 0)
         h.setSpacing(8)
         self._dot = QLabel()
         self._dot.setFixedSize(8, 8)
@@ -355,27 +457,9 @@ class StatusPill(QFrame):
         if color != self._color:
             self._color = color
             self._dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
-        self._text.setText(text)
-
-
-class Toast(QLabel):
-    """One-line feedback message that falls back to an idle hint."""
-
-    def __init__(self, idle_text: str) -> None:
-        super().__init__(idle_text)
-        self.setObjectName("Toast")
-        self.setWordWrap(True)
-        self._idle = idle_text
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.clear_message)
-
-    def show_message(self, text: str, level: str = "info", duration_ms: int = 3500) -> None:
-        self.setText(text)
-        self.setStyleSheet(f"color: {theme.LEVEL_COLORS.get(level, theme.MUTED)};")
-        self._timer.start(duration_ms)
-
-    def clear_message(self) -> None:
-        self._timer.stop()
-        self.setText(self._idle)
-        self.setStyleSheet("")
+        if text != self._text.text():
+            self._text.setText(text)
+            # Size immediately, so a longer status is never drawn cut off for a frame.
+            m = self.layout().contentsMargins()
+            width = m.left() + self._dot.width() + self.layout().spacing() + m.right()
+            self.setFixedWidth(width + self._text.fontMetrics().horizontalAdvance(text) + 2)
