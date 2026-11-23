@@ -77,6 +77,7 @@ from .paths import asset, data_dir
 from .widgets import (
     Card,
     ElidedLabel,
+    NavButton,
     PrimaryButton,
     Segmented,
     StatusPill,
@@ -281,32 +282,27 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(8, 10, 8, 10)
         v.setSpacing(6)
 
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        self.menu_btn = QPushButton()
-        self.menu_btn.setObjectName("NavButton")
-        self.menu_btn.setFixedSize(40, 40)
-        self.menu_btn.setIcon(glyph_icon("menu", theme.MUTED, 18))
-        self.menu_btn.setIconSize(QSize(18, 18))
-        self.menu_btn.setCursor(Qt.PointingHandCursor)
+        # The menu button is a nav item too: its icon shares the icons' column and
+        # the brand starts exactly where the page labels start.
+        self.menu_btn = NavButton(glyph_icon("menu", theme.MUTED, 18), self.sidebar)
+        self.menu_btn.setFixedHeight(40)
         self.menu_btn.clicked.connect(self._toggle_sidebar)
-        top.addWidget(self.menu_btn)
         self.brand = label(APP_NAME, "Brand")
-        top.addWidget(self.brand, 1)
-        v.addLayout(top)
+        self.brand.setParent(self.menu_btn)
+        self.brand.setAttribute(Qt.WA_TransparentForMouseEvents)
+        v.addWidget(self.menu_btn)
         v.addSpacing(6)
 
         self.nav_group = QButtonGroup(self.sidebar)
         self.nav_buttons: Dict[str, QPushButton] = {}
         for key, _title, desc, icon in PAGES:
-            btn = QPushButton()
-            btn.setObjectName("NavButton")
+            nav_icon = QIcon()
+            nav_icon.addPixmap(glyph_icon(icon, theme.MUTED, 18).pixmap(54, 54), QIcon.Normal, QIcon.Off)
+            nav_icon.addPixmap(glyph_icon(icon, theme.TEXT, 18).pixmap(54, 54), QIcon.Normal, QIcon.On)
+            btn = NavButton(nav_icon)
             btn.setCheckable(True)
             btn.setFixedHeight(40)
-            btn.setIcon(glyph_icon(icon, theme.MUTED, 18))
-            btn.setIconSize(QSize(18, 18))
             btn.setToolTip(t(desc))
-            btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda _=False, k=key: self._show_page(k))
             self.nav_group.addButton(btn)
             self.nav_buttons[key] = btn
@@ -317,8 +313,14 @@ class MainWindow(QMainWindow):
 
     def _apply_sidebar_labels(self, expanded: bool) -> None:
         self.brand.setVisible(expanded)
+        if expanded:  # cap-centred like the nav labels, starting in their column
+            self.brand.ensurePolished()
+            self.brand.adjustSize()
+            fm = self.brand.fontMetrics()
+            baseline = round(self.menu_btn.height() / 2 + fm.capHeight() / 2)
+            self.brand.move(NavButton.TEXT_X, baseline - fm.ascent() - self.brand.contentsMargins().top())
         for key, title, _desc, _icon in PAGES:
-            self.nav_buttons[key].setText(f"   {t(title)}" if expanded else "")
+            self.nav_buttons[key].setText(t(title) if expanded else "")
 
     def _toggle_sidebar(self) -> None:
         expanded = not self.settings.sidebar_expanded
@@ -394,7 +396,7 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.play_btn)
         v.addLayout(buttons)
         v.addWidget(self._build_macro_panel())
-        card.add(panel, (12, 12, 12, 10))
+        card.add(panel, (12, 12, 12, 12))
         body.addWidget(card)
 
         body.addWidget(section(t("card_playback")))
@@ -431,7 +433,7 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("MacroPanel")
         h = QHBoxLayout(panel)
-        h.setContentsMargins(10, 8, 8, 8)
+        h.setContentsMargins(10, 9, 9, 9)
         h.setSpacing(10)
         self.macro_icon = QLabel()
         self.macro_icon.setObjectName("MacroIcon")
@@ -439,13 +441,17 @@ class MainWindow(QMainWindow):
         self.macro_icon.setAlignment(Qt.AlignCenter)
         h.addWidget(self.macro_icon, 0, Qt.AlignVCenter)
         text = QVBoxLayout()
-        text.setSpacing(1)
+        text.setSpacing(2)
         self.macro_title = ElidedLabel("", "MacroTitle")
         self.macro_meta = label("", "MacroMeta", wrap=True)
         self.macro_meta.setMinimumWidth(80)  # wrap further instead of widening the page
+        # Stretches keep name and stats together, centred, whatever the panel height.
+        text.addStretch(1)
         text.addWidget(self.macro_title)
         text.addWidget(self.macro_meta)
+        text.addStretch(1)
         h.addLayout(text, 1)
+        self.macro_panel = panel
         self.save_btn = secondary_button(t("btn_save"), "save", self.save_macro_dialog)
         self.load_btn = secondary_button(t("btn_open"), "open", self.load_macro_dialog)
         for btn in (self.save_btn, self.load_btn):
@@ -458,6 +464,7 @@ class MainWindow(QMainWindow):
         self.clicker_btn = PrimaryButton("violet")
         self.clicker_btn.clicked.connect(self.toggle_clicker)
         body.addWidget(self.clicker_btn)
+        body.addSpacing(4)
         card = Card()
         action = Segmented([t("action_mode_click"), t("action_mode_hold")], CLICKER_ACTIONS.index(s.ac_action),
                            self._on_clicker_action)  # fmt: skip
@@ -583,7 +590,8 @@ class MainWindow(QMainWindow):
         card.row(t("row_version"), None, label(f"{APP_NAME} {__version__}", "Info"))
         card.row(t("btn_data_folder"), t("desc_data_folder"),
                  secondary_button(t("btn_open"), "folder", lambda: open_folder(data_dir())))  # fmt: skip
-        card.row(t("btn_reset_defaults"), None, secondary_button(t("btn_reset_defaults"), None, self._reset_defaults))
+        card.row(t("row_reset_defaults"), t("desc_reset_defaults"),
+                 secondary_button(t("btn_reset_defaults"), None, self._reset_defaults))  # fmt: skip
         body.addWidget(card)
 
     def _build_tray_menu(self) -> None:
@@ -753,8 +761,16 @@ class MainWindow(QMainWindow):
         dpr = self.devicePixelRatioF()
         pixmap = glyph_icon(icon, color, 16).pixmap(QSize(16, 16), dpr)
         self.macro_icon.setPixmap(pixmap)
+        if self.macro_icon.property("tint") != color:  # soft disc in the state colour
+            self.macro_icon.setProperty("tint", color)
+            fill = theme.HOVER if color == theme.DIM else theme.tint(color, 0.16)
+            self.macro_icon.setStyleSheet(f"background: {fill}; border-radius: 17px;")
         self.macro_title.setText(title)
+        # Only the long hints wrap; a wrapped label keeps a too-tall estimated
+        # height in this row, which left a gap under short stats like "48 events".
+        self.macro_meta.setWordWrap(not events or self.mode is Mode.RECORDING)
         self.macro_meta.setText(meta)
+        self.macro_panel.layout().invalidate()  # re-measure for the new text height
 
     def _busy(self) -> None:
         """Another mode is running; the status indicator already shows which."""

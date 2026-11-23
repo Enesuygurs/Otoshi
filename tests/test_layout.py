@@ -74,8 +74,8 @@ def test_status_shows_recorded_macro(qapp):
         assert window.status_pill._text.text() == "Ready"
         window.macro.events = [{"t": i * 0.02, "type": "move", "x": i, "y": i} for i in range(48)]
         window._set_mode(window.mode)  # what happens when a recording stops
-        assert window.status_pill._text.text() == "Macro ready · 48 events"
-        assert window.overlay._text == "Macro ready · 48 events"
+        assert window.status_pill._text.text() == "Macro loaded · 48 events"
+        assert window.overlay._text == "Macro loaded · 48 events"
         assert window._status_color() == theme.EMERALD
     finally:
         window.quit_app()

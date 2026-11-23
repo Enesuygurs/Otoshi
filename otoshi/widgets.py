@@ -103,51 +103,57 @@ class ElidedLabel(QLabel):
         super().setText(shown)
 
 
-def separator() -> QFrame:
-    line = QFrame()
-    line.setObjectName("Separator")
-    line.setFixedHeight(1)
-    return line
-
-
 class Card(QFrame):
-    """Rounded surface holding rows separated by hairlines."""
+    """Group of rows drawn as separate tiles that read as one rounded block.
+
+    There are no divider lines: a small gap of window background between the
+    tiles separates the rows, and only the block's outer corners are fully
+    rounded (see ``#Tile[pos=...]`` in the style sheet).
+    """
+
+    GAP = 2
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 2, 0, 2)
-        self._layout.setSpacing(0)
-        self._rows = 0
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(self.GAP)
+        self._tiles: List[QFrame] = []
 
-    def add(self, widget: QWidget, margins=(12, 7, 12, 7)) -> QWidget:
-        if self._rows:
-            holder = QWidget()
-            lay = QHBoxLayout(holder)
-            lay.setContentsMargins(12, 0, 12, 0)
-            lay.addWidget(separator())
-            self._layout.addWidget(holder)
-        wrapper = QWidget()
-        lay = QVBoxLayout(wrapper)
+    def add(self, widget: QWidget, margins=(14, 8, 12, 8)) -> QWidget:
+        tile = QFrame()
+        tile.setObjectName("Tile")
+        lay = QVBoxLayout(tile)
         lay.setContentsMargins(*margins)
         lay.addWidget(widget)
-        self._layout.addWidget(wrapper)
-        self._rows += 1
+        self._layout.addWidget(tile)
+        self._tiles.append(tile)
+        self._update_corners()
         return widget
+
+    def _update_corners(self) -> None:
+        last = len(self._tiles) - 1
+        for i, tile in enumerate(self._tiles):
+            pos = "only" if last == 0 else "first" if i == 0 else "last" if i == last else "middle"
+            if tile.property("pos") != pos:
+                tile.setProperty("pos", pos)
+                tile.style().unpolish(tile)
+                tile.style().polish(tile)
 
     def row(self, title: str, desc: Optional[str], *controls: QWidget) -> QWidget:
         """Title/description on the left, controls aligned right."""
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(10)
+        h.setSpacing(8)
         text = QVBoxLayout()
-        text.setSpacing(0)
+        text.setSpacing(1)
         text.addWidget(label(title, "RowTitle", wrap=True))
         if desc:
             text.addWidget(label(desc, "RowDesc", wrap=True))
         h.addLayout(text, 1)
+        h.addSpacing(4)
         for control in controls:
             h.addWidget(control, 0, Qt.AlignVCenter)
         return self.add(row)
@@ -156,8 +162,8 @@ class Card(QFrame):
 def section(title: str, desc: Optional[str] = None) -> QWidget:
     box = QWidget()
     v = QVBoxLayout(box)
-    v.setContentsMargins(2, 6, 0, 2)
-    v.setSpacing(0)
+    v.setContentsMargins(4, 8, 0, 2)
+    v.setSpacing(1)
     v.addWidget(label(upper(title), "SectionTitle"))
     if desc:
         v.addWidget(label(desc, "SectionDesc", wrap=True))
@@ -202,8 +208,42 @@ class IconTextButton(QPushButton):
             painter.drawPixmap(QPointF(x, cy - icon_size.height() / 2), pixmap)
             x += icon_size.width() + gap
         painter.setPen(self.palette().color(QPalette.ButtonText) if self.isEnabled() else QColor(theme.DIM))
-        text_rect = QRectF(x, rect.top(), rect.right() - x, rect.height())
-        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, shown)
+        # Centre the capitals, not the font's line box: Segoe UI has extra room
+        # above the caps, so AlignVCenter leaves text visibly low.
+        painter.drawText(QPointF(x, round(cy + fm.capHeight() / 2)), shown)
+
+
+class NavButton(QPushButton):
+    """Sidebar item: icon and label at fixed x positions, so the icons form one
+    column (also with the menu button) and the labels another (with the brand)."""
+
+    ICON_X = 11
+    TEXT_X = 41
+
+    def __init__(self, icon: QIcon, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("NavButton")
+        self.setIcon(icon)
+        self.setIconSize(QSize(18, 18))
+        self.setCursor(Qt.PointingHandCursor)
+
+    def paintEvent(self, _event) -> None:
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        opt.text, opt.icon = "", QIcon()
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.CE_PushButton, opt)
+        size = self.iconSize()
+        cy = self.height() / 2
+        state = QIcon.On if self.isChecked() else QIcon.Off
+        pixmap = self.icon().pixmap(size, self.devicePixelRatioF(), QIcon.Normal, state)
+        painter.drawPixmap(QPointF(self.ICON_X, cy - size.height() / 2), pixmap)
+        if self.text():
+            fm = self.fontMetrics()
+            shown = fm.elidedText(self.text(), Qt.ElideRight, max(0, self.width() - self.TEXT_X - 8))
+            active = self.isChecked() or self.underMouse()
+            painter.setPen(QColor(theme.TEXT if active else theme.MUTED))
+            painter.drawText(QPointF(self.TEXT_X, round(cy + fm.capHeight() / 2)), shown)
 
 
 class PrimaryButton(IconTextButton):
@@ -358,13 +398,13 @@ class Segmented(QFrame):
         self.setObjectName("Segment")
         h = QHBoxLayout(self)
         h.setContentsMargins(3, 3, 3, 3)
-        h.setSpacing(2)
+        h.setSpacing(3)
         self._group = QButtonGroup(self)
         for i, text in enumerate(labels):
             btn = QPushButton(text)
             btn.setObjectName("SegmentButton")
             btn.setCheckable(True)
-            btn.setMinimumHeight(22)
+            btn.setMinimumHeight(24)
             btn.setCursor(Qt.PointingHandCursor)
             self._group.addButton(btn, i)
             h.addWidget(btn)
@@ -411,7 +451,7 @@ class ToggleSwitch(QAbstractButton):
         p.setRenderHint(QPainter.Antialiasing)
         if not self.isEnabled():
             p.setOpacity(0.4)
-        off, on = QColor("#3A3A42"), QColor(theme.BLUE)
+        off, on = QColor(theme.HOVER_HI), QColor(theme.BLUE)
         k = self._offset
         track = QColor(
             round(off.red() + (on.red() - off.red()) * k),
@@ -444,7 +484,7 @@ class StatusPill(QFrame):
         self.setObjectName("Pill")
         self.setFixedHeight(24)
         h = QHBoxLayout(self)
-        h.setContentsMargins(10, 0, 12, 0)
+        h.setContentsMargins(10, 0, 12, 2)  # 2 px lift: optical centring of the text
         h.setSpacing(8)
         self._dot = QLabel()
         self._dot.setFixedSize(8, 8)
@@ -457,6 +497,8 @@ class StatusPill(QFrame):
         if color != self._color:
             self._color = color
             self._dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
+            # A soft wash of the mode colour instead of an outline.
+            self.setStyleSheet(f"#Pill {{ background: {theme.tint(color, 0.14)}; }}")
         if text != self._text.text():
             self._text.setText(text)
             # Size immediately, so a longer status is never drawn cut off for a frame.
